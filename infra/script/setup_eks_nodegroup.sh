@@ -22,14 +22,12 @@ echo "========================================"
 VPC_ID=$(aws eks describe-cluster \
     --name $CLUSTER_NAME \
     --region $REGION \
-    --no-cli-pager \
     --query "cluster.resourcesVpcConfig.vpcId" \
     --output text)
 
 CLUSTER_SG=$(aws eks describe-cluster \
     --name $CLUSTER_NAME \
     --region $REGION \
-    --no-cli-pager \
     --query "cluster.resourcesVpcConfig.clusterSecurityGroupId" \
     --output text)
 
@@ -43,8 +41,7 @@ echo "==================================="
 NODEGROUP_INFO=$(aws eks describe-nodegroup \
     --cluster-name $CLUSTER_NAME \
     --nodegroup-name $NODEGROUP_NAME \
-    --region $REGION \
-    --no-cli-pager)
+    --region $REGION)
 
 NODE_ROLE=$(echo "$NODEGROUP_INFO" | jq -r ".nodegroup.nodeRole")
 ROLE_NAME=$(echo $NODE_ROLE | awk -F'/' '{print $2}')
@@ -73,8 +70,7 @@ TRUST_POLICY='{
 echo "Updating trust policy for role: $ROLE_NAME"
 aws iam update-assume-role-policy \
     --role-name $ROLE_NAME \
-    --policy-document "$TRUST_POLICY" \
-    --no-cli-pager
+    --policy-document "$TRUST_POLICY"
 
 if [[ $? -eq 0 ]]; then
     echo "✅ Trust policy updated successfully"
@@ -108,7 +104,7 @@ for POLICY in "${REQUIRED_POLICIES[@]}"; do
         aws iam attach-role-policy \
             --role-name $ROLE_NAME \
             --policy-arn "arn:aws:iam::aws:policy/$POLICY" \
-            --no-cli-pager
+            
         
         if [[ $? -eq 0 ]]; then
             echo "  ✅ $POLICY attached successfully"
@@ -128,7 +124,7 @@ echo "Checking 443 inbound rule..."
 if ! aws ec2 describe-security-groups \
     --group-ids $CLUSTER_SG \
     --region $REGION \
-    --no-cli-pager \
+     \
     --query "SecurityGroups[0].IpPermissions[?FromPort==\`443\` && ToPort==\`443\`]" \
     --output text | grep -q .; then
     echo "  🔧 Adding 443 inbound rule..."
@@ -138,7 +134,7 @@ if ! aws ec2 describe-security-groups \
         --port 443 \
         --cidr 0.0.0.0/0 \
         --region $REGION \
-        --no-cli-pager
+        
     echo "  ✅ 443 inbound rule added"
 else
     echo "  ✅ 443 inbound rule already exists"
@@ -149,7 +145,7 @@ echo "Checking 1025-65535 inbound rule..."
 if ! aws ec2 describe-security-groups \
     --group-ids $CLUSTER_SG \
     --region $REGION \
-    --no-cli-pager \
+     \
     --query "SecurityGroups[0].IpPermissions[?FromPort==\`1025\` && ToPort==\`65535\`]" \
     --output text | grep -q .; then
     echo "  🔧 Adding 1025-65535 inbound rule..."
@@ -159,7 +155,7 @@ if ! aws ec2 describe-security-groups \
         --port 1025-65535 \
         --cidr 0.0.0.0/0 \
         --region $REGION \
-        --no-cli-pager
+        
     echo "  ✅ 1025-65535 inbound rule added"
 else
     echo "  ✅ 1025-65535 inbound rule already exists"
@@ -182,7 +178,7 @@ if [[ -n "$NG_SGS" && "$NG_SGS" != "null" ]]; then
         if ! aws ec2 describe-security-groups \
             --group-ids $SG \
             --region $REGION \
-            --no-cli-pager \
+             \
             --query "SecurityGroups[0].IpPermissionsEgress[?IpProtocol==\`-1\`]" \
             --output text | grep -q .; then
             echo "    🔧 Adding all outbound rule..."
@@ -192,7 +188,7 @@ if [[ -n "$NG_SGS" && "$NG_SGS" != "null" ]]; then
                 --port -1 \
                 --cidr 0.0.0.0/0 \
                 --region $REGION \
-                --no-cli-pager
+                
             echo "    ✅ All outbound rule added"
         else
             echo "    ✅ All outbound rule already exists"
@@ -203,7 +199,7 @@ if [[ -n "$NG_SGS" && "$NG_SGS" != "null" ]]; then
         if ! aws ec2 describe-security-groups \
             --group-ids $SG \
             --region $REGION \
-            --no-cli-pager \
+             \
             --query "SecurityGroups[0].IpPermissions[?FromPort==\`1025\` && ToPort==\`65535\`]" \
             --output text | grep -q .; then
             echo "    🔧 Adding node-to-node communication rule..."
@@ -213,7 +209,7 @@ if [[ -n "$NG_SGS" && "$NG_SGS" != "null" ]]; then
                 --port 1025-65535 \
                 --source-group $SG \
                 --region $REGION \
-                --no-cli-pager
+                
             echo "    ✅ Node-to-node communication rule added"
         else
             echo "    ✅ Node-to-node communication rule already exists"
@@ -232,7 +228,7 @@ echo "============================"
 CURRENT_ENDPOINTS=$(aws ec2 describe-vpc-endpoints \
     --filters "Name=vpc-id,Values=$VPC_ID" \
     --region $REGION \
-    --no-cli-pager \
+     \
     --query "VpcEndpoints[].ServiceName" \
     --output text)
 
@@ -240,7 +236,7 @@ CURRENT_ENDPOINTS=$(aws ec2 describe-vpc-endpoints \
 SUBNET_IDS=$(aws eks describe-cluster \
     --name $CLUSTER_NAME \
     --region $REGION \
-    --no-cli-pager \
+     \
     --query "cluster.resourcesVpcConfig.subnetIds[]" \
     --output text)
 
@@ -261,7 +257,7 @@ for ENDPOINT in "${REQUIRED_ENDPOINTS[@]}"; do
                 --vpc-id $VPC_ID \
                 --service-name $ENDPOINT \
                 --region $REGION \
-                --no-cli-pager
+                
         else
             # ECR은 Interface 타입
             aws ec2 create-vpc-endpoint \
@@ -271,7 +267,7 @@ for ENDPOINT in "${REQUIRED_ENDPOINTS[@]}"; do
                 --subnet-ids $SUBNET_IDS \
                 --security-group-ids $CLUSTER_SG \
                 --region $REGION \
-                --no-cli-pager
+                
         fi
         
         if [[ $? -eq 0 ]]; then
