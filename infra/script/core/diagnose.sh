@@ -433,7 +433,35 @@ check_dns_resolution() {
     fi
 }
 
-# 12. 네트워크 연결성 테스트
+# 12. 컨테이너 인터넷 접근 확인
+check_container_internet_access() {
+    log_info "컨테이너 인터넷 접근 확인 중..."
+    
+    # 현재 노드가 있는지 확인
+    NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
+    if [[ $NODES -eq 0 ]]; then
+        log_warning "노드가 없어 컨테이너 인터넷 접근을 테스트할 수 없음"
+        return 0
+    fi
+    
+    # DNS 해석 테스트
+    DNS_TEST=$(kubectl run test-dns --image=busybox --rm -i --restart=Never -- nslookup google.com 2>/dev/null | grep -c "142.250" || echo "0")
+    if [[ $DNS_TEST -gt 0 ]]; then
+        log_success "컨테이너 DNS 해석 정상"
+    else
+        log_error "컨테이너 DNS 해석 실패"
+    fi
+    
+    # HTTP 연결 테스트
+    HTTP_TEST=$(kubectl run test-http --image=busybox --rm -i --restart=Never -- wget -qO- --timeout=10 http://httpbin.org/ip 2>/dev/null | grep -c "origin" || echo "0")
+    if [[ $HTTP_TEST -gt 0 ]]; then
+        log_success "컨테이너 HTTP 연결 정상"
+    else
+        log_error "컨테이너 HTTP 연결 실패"
+    fi
+}
+
+# 13. 네트워크 연결성 테스트
 check_connectivity() {
     log_info "네트워크 연결성 확인 중..."
     
@@ -484,6 +512,7 @@ main_diagnosis() {
             check_dns_resolution
             check_aws_auth
             check_nodegroup_status
+            check_container_internet_access
             check_connectivity
             ;;
         *)

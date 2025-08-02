@@ -7,7 +7,7 @@ REGION="ap-northeast-2"
 
 if [[ -z "$CLUSTER_NAME" ]]; then
   echo "사용법: $0 <클러스터-이름> [수정-유형]"
-  echo "수정 유형: all, aws-auth, cni, routing, security, ports (기본값: all)"
+  echo "수정 유형: all, aws-auth, cni, routing, security, ports, internet (기본값: all)"
   exit 1
 fi
 
@@ -409,6 +409,93 @@ fix_security_groups() {
     fi
 }
 
+# 5. 컨테이너 인터넷 접근 수정
+fix_container_internet_access() {
+    log_info "컨테이너 인터넷 접근 수정 중..."
+    
+    # 클러스터 보안 그룹 ID 가져오기
+    CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
+    CLUSTER_SG=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.clusterSecurityGroupId')
+    
+    if [[ -n "$CLUSTER_SG" && "$CLUSTER_SG" != "null" ]]; then
+        # 아웃바운드 규칙 확인
+        CURRENT_EGRESS=$(aws ec2 describe-security-groups --group-ids $CLUSTER_SG --query "SecurityGroups[0].IpPermissionsEgress" --output json 2>/dev/null)
+        
+        # 아웃바운드 규칙이 비어있는지 확인
+        EGRESS_COUNT=$(echo "$CURRENT_EGRESS" | jq 'length')
+        
+        if [[ $EGRESS_COUNT -eq 0 ]]; then
+            log_info "아웃바운드 규칙이 없어 추가 중..."
+            
+            # 모든 트래픽 허용 아웃바운드 규칙 추가
+            aws ec2 authorize-security-group-egress \
+                --group-id $CLUSTER_SG \
+                --protocol -1 \
+                --port -1 \
+                --cidr 0.0.0.0/0 \
+                --region $REGION
+            
+            if [[ $? -eq 0 ]]; then
+                log_success "아웃바운드 규칙이 성공적으로 추가되었습니다"
+            else
+                log_error "아웃바운드 규칙 추가에 실패했습니다"
+            fi
+        else
+            log_success "아웃바운드 규칙이 이미 존재합니다"
+        fi
+        
+        # NAT Gateway 상태 확인
+        VPC_ID=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.vpcId')
+        SUBNET_IDS=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.subnetIds[]')
+        
+        for SUBNET_ID in $SUBNET_IDS; do
+            ROUTE_TABLE_ID=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$SUBNET_ID" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null)
+            
+            if [[ "$ROUTE_TABLE_ID" != "None" && "$ROUTE_TABLE_ID" != "null" ]]; then
+                NAT_GATEWAY=$(aws ec2 describe-route-tables --route-table-ids $ROUTE_TABLE_ID --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].NatGatewayId" --output text 2>/dev/null)
+                
+                if [[ -n "$NAT_GATEWAY" && "$NAT_GATEWAY" != "None" ]]; then
+                    NAT_STATUS=$(aws ec2 describe-nat-gateways --nat-gateway-ids $NAT_GATEWAY --query "NatGateways[0].State" --output text 2>/dev/null)
+                    
+                    if [[ "$NAT_STATUS" == "available" ]]; then
+                        log_success "서브넷 $SUBNET_ID의 NAT Gateway 정상: $NAT_GATEWAY"
+                    else
+                        log_warning "서브넷 $SUBNET_ID의 NAT Gateway 상태: $NAT_STATUS"
+                    fi
+                else
+                    log_warning "서브넷 $SUBNET_ID에 NAT Gateway가 없습니다"
+                fi
+            fi
+        done
+        
+        # 컨테이너 인터넷 접근 테스트 (노드가 있는 경우)
+        NODES=$(kubectl get nodes --no-headers 2>/dev/null | wc -l)
+        if [[ $NODES -gt 0 ]]; then
+            log_info "컨테이너 인터넷 접근 테스트 중..."
+            
+            # DNS 해석 테스트
+            DNS_TEST=$(kubectl run test-dns-fix --image=busybox --rm -i --restart=Never -- nslookup google.com 2>/dev/null | grep -c "142.250" || echo "0")
+            if [[ $DNS_TEST -gt 0 ]]; then
+                log_success "컨테이너 DNS 해석 정상"
+            else
+                log_error "컨테이너 DNS 해석 실패"
+            fi
+            
+            # HTTP 연결 테스트
+            HTTP_TEST=$(kubectl run test-http-fix --image=busybox --rm -i --restart=Never -- wget -qO- --timeout=10 http://httpbin.org/ip 2>/dev/null | grep -c "origin" || echo "0")
+            if [[ $HTTP_TEST -gt 0 ]]; then
+                log_success "컨테이너 HTTP 연결 정상"
+            else
+                log_error "컨테이너 HTTP 연결 실패"
+            fi
+        else
+            log_warning "노드가 없어 컨테이너 인터넷 접근을 테스트할 수 없음"
+        fi
+    else
+        log_error "클러스터 보안 그룹을 찾을 수 없습니다"
+    fi
+}
+
 # 메인 수정 함수
 main_fix() {
     # 먼저 AWS STS 상태 확인
@@ -434,11 +521,15 @@ main_fix() {
         "ports")
             fix_security_groups
             ;;
+        "internet")
+            fix_container_internet_access
+            ;;
         "all")
             fix_aws_auth
             fix_cni
             fix_routing
             fix_security_groups
+            fix_container_internet_access
             ;;
         *)
             log_error "잘못된 수정 유형: $FIX_TYPE"
