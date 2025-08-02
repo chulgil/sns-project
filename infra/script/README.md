@@ -2,6 +2,105 @@
 
 이 디렉토리는 AWS EKS 노드그룹 관리를 위한 스크립트들을 포함합니다.
 
+## 🏗️ EKS 네트워크 아키텍처
+
+### 권장 구성
+
+EKS 클러스터는 고가용성을 위해 Multi-AZ 구성이 권장됩니다. 각 가용영역(AZ)에는 별도의 퍼블릭 서브넷과 프라이빗 서브넷이 필요합니다.
+
+```mermaid
+graph TB
+    subgraph "VPC (vpc-054fd35fcab64e3af)"
+        subgraph "Availability Zone A (ap-northeast-2a)"
+            subgraph "Public Subnet A"
+                IGW_A[Internet Gateway]
+                NAT_A[NAT Gateway 1<br/>nat-05b0d99aa64ed8c00<br/>3.34.235.18]
+            end
+            
+            subgraph "Private Subnet A"
+                EKS_A[EKS Nodes<br/>subnet-0d1bf6af96eba2b10<br/>10.0.128.0/20]
+            end
+        end
+        
+        subgraph "Availability Zone B (ap-northeast-2b)"
+            subgraph "Public Subnet B"
+                IGW_B[Internet Gateway]
+                NAT_B[NAT Gateway 2<br/>nat-043cbe85102ec64e7<br/>3.37.6.43]
+            end
+            
+            subgraph "Private Subnet B"
+                EKS_B[EKS Nodes<br/>subnet-0436c6d3f4296c972<br/>10.0.144.0/20]
+            end
+        end
+        
+        subgraph "EKS Control Plane"
+            EKS_CP[EKS Control Plane<br/>Multi-AZ]
+        end
+    end
+    
+    subgraph "Internet"
+        INTERNET[Internet]
+    end
+    
+    %% 라우팅 연결
+    IGW_A --> INTERNET
+    IGW_B --> INTERNET
+    NAT_A --> IGW_A
+    NAT_B --> IGW_B
+    EKS_A --> NAT_A
+    EKS_B --> NAT_B
+    EKS_CP --> NAT_A
+    EKS_CP --> NAT_B
+    
+    %% 스타일
+    classDef publicSubnet fill:#e1f5fe
+    classDef privateSubnet fill:#f3e5f5
+    classDef natGateway fill:#fff3e0
+    classDef internetGateway fill:#e8f5e8
+    classDef eksControl fill:#fce4ec
+    
+    class IGW_A,IGW_B internetGateway
+    class NAT_A,NAT_B natGateway
+    class EKS_A,EKS_B privateSubnet
+    class EKS_CP eksControl
+```
+
+### 네트워크 구성 요구사항
+
+#### 1. 서브넷 구성
+- **퍼블릭 서브넷 (2개):** NAT Gateway용
+  - Internet Gateway로 라우팅
+  - 각 AZ에 하나씩 배치
+  - `MapPublicIpOnLaunch: false` (NAT Gateway만 사용)
+
+- **프라이빗 서브넷 (2개):** EKS 노드용
+  - NAT Gateway로 라우팅
+  - 각 AZ에 하나씩 배치
+  - `MapPublicIpOnLaunch: false`
+
+#### 2. 라우팅 구성
+```
+프라이빗 서브넷 → NAT Gateway → Internet Gateway → 인터넷
+```
+
+#### 3. 고가용성
+- 각 AZ에 별도의 NAT Gateway
+- 각 AZ의 EKS 노드는 해당 AZ의 NAT Gateway 사용
+- 장애 시 다른 AZ의 NAT Gateway로 자동 전환
+
+### 현재 구성 상태
+
+#### ✅ 정상 구성
+- **NAT Gateway 1:** `subnet-0283707c59adbed37` (ap-northeast-2a) - 별도 퍼블릭 서브넷
+- **EKS 서브넷 1:** `subnet-0d1bf6af96eba2b10` (ap-northeast-2a) - NAT Gateway 1 사용
+
+#### ❌ 문제 구성
+- **NAT Gateway 2:** `subnet-0436c6d3f4296c972` (ap-northeast-2b) - EKS 서브넷과 공유
+- **EKS 서브넷 2:** `subnet-0436c6d3f4296c972` (ap-northeast-2b) - NAT Gateway 2와 동일 서브넷
+
+#### 🔧 권장 수정사항
+NAT Gateway 2를 별도의 퍼블릭 서브넷(`subnet-0a55957882f71de59`)으로 이동해야 합니다.
+
 ## 📁 디렉토리 구조
 
 ```

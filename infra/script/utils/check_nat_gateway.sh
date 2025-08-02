@@ -162,11 +162,12 @@ check_nat_gateway_subnet_routing() {
             done
             
             if [[ "$is_eks_subnet" == "true" ]]; then
-                log_warning "  NAT Gateway $nat_id 가 EKS 서브넷과 동일한 서브넷에 있습니다."
-                log_warning "  이는 권장되지 않는 구성입니다. NAT Gateway는 별도의 퍼블릭 서브넷에 있어야 합니다."
+                log_error "  NAT Gateway $nat_id 가 EKS 서브넷과 동일한 서브넷에 있습니다."
+                log_error "  이는 잘못된 구성입니다. NAT Gateway는 별도의 퍼블릭 서브넷에 있어야 합니다."
                 echo "  라우팅 테이블: (EKS 서브넷과 공유)"
                 echo "  NAT Gateway: $nat_id"
-                log_success "  NAT Gateway $nat_id 는 EKS 서브넷에서 직접 사용됩니다."
+                log_error "  권장 조치: NAT Gateway를 별도의 퍼블릭 서브넷으로 이동해야 합니다."
+                return 1
             else
                 # NAT Gateway 서브넷의 라우팅 테이블 확인
                 local route_table=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$subnet_id" --query 'RouteTables[0]' --output json 2>/dev/null)
@@ -182,9 +183,11 @@ check_nat_gateway_subnet_routing() {
                         log_success "  NAT Gateway 서브넷 $subnet_id 는 Internet Gateway로 라우팅됩니다."
                     else
                         log_error "  NAT Gateway 서브넷 $subnet_id 에 Internet Gateway 라우트가 없습니다."
+                        return 1
                     fi
                 else
                     log_error "NAT Gateway 서브넷 $subnet_id 의 라우팅 테이블을 찾을 수 없습니다."
+                    return 1
                 fi
             fi
         fi

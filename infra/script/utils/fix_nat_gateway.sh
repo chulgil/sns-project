@@ -162,8 +162,10 @@ map_nat_gateways_to_subnets() {
     if [[ -n "$eks_subnet_1" && -n "$nat_gateway_1" ]]; then
         # NAT Gateway 1이 EKS 서브넷과 동일한 서브넷에 있는지 확인
         if is_nat_gateway_in_eks_subnet "$nat_gateway_1_subnet" "$eks_subnets"; then
-            log_warning "NAT Gateway 1이 EKS 서브넷과 동일한 서브넷에 있습니다."
-            log_warning "이는 권장되지 않는 구성이지만, 기능적으로는 작동합니다."
+            log_error "NAT Gateway 1이 EKS 서브넷과 동일한 서브넷에 있습니다."
+            log_error "이는 잘못된 구성입니다. NAT Gateway는 별도의 퍼블릭 서브넷에 있어야 합니다."
+            log_error "권장 조치: NAT Gateway를 별도의 퍼블릭 서브넷으로 이동해야 합니다."
+            return 1
         fi
         
         local route_table_1=$(get_route_table_id "$eks_subnet_1")
@@ -175,8 +177,40 @@ map_nat_gateways_to_subnets() {
     if [[ -n "$eks_subnet_2" && -n "$nat_gateway_2" ]]; then
         # NAT Gateway 2가 EKS 서브넷과 동일한 서브넷에 있는지 확인
         if is_nat_gateway_in_eks_subnet "$nat_gateway_2_subnet" "$eks_subnets"; then
-            log_warning "NAT Gateway 2가 EKS 서브넷과 동일한 서브넷에 있습니다."
-            log_warning "이는 권장되지 않는 구성이지만, 기능적으로는 작동합니다."
+            log_error "NAT Gateway 2가 EKS 서브넷과 동일한 서브넷에 있습니다."
+            log_error "이는 잘못된 구성입니다. NAT Gateway는 별도의 퍼블릭 서브넷에 있어야 합니다."
+            log_error "권장 조치: NAT Gateway를 별도의 퍼블릭 서브넷으로 이동해야 합니다."
+            
+            # 사용 가능한 퍼블릭 서브넷 찾기
+            log_info "사용 가능한 퍼블릭 서브넷을 찾는 중..."
+            local vpc_id=$(aws eks describe-cluster --name $CLUSTER_NAME --query 'cluster.resourcesVpcConfig.vpcId' --output text 2>/dev/null)
+            
+            # ap-northeast-2b의 퍼블릭 서브넷 찾기 (subnet-0a55957882f71de59)
+            local available_subnet="subnet-0a55957882f71de59"
+            
+            # 서브넷이 실제로 존재하는지 확인
+            local subnet_exists=$(aws ec2 describe-subnets --subnet-ids "$available_subnet" --query 'Subnets[0].SubnetId' --output text 2>/dev/null)
+            
+            if [[ "$subnet_exists" == "$available_subnet" ]]; then
+                log_info "사용 가능한 퍼블릭 서브넷: $available_subnet"
+                log_info "수동으로 NAT Gateway를 이동하려면 다음 명령을 실행하세요:"
+                echo "  # 1. 새로운 Elastic IP 할당"
+                echo "  aws ec2 allocate-address --domain vpc"
+                echo ""
+                echo "  # 2. 새로운 NAT Gateway 생성"
+                echo "  aws ec2 create-nat-gateway --subnet-id $available_subnet --allocation-id <new-elastic-ip-id>"
+                echo ""
+                echo "  # 3. EKS 서브넷의 라우팅 테이블 업데이트"
+                echo "  aws ec2 replace-route --route-table-id rtb-0cc581b9fb3f9493a --destination-cidr-block 0.0.0.0/0 --nat-gateway-id <new-nat-gateway-id>"
+                echo ""
+                echo "  # 4. 기존 NAT Gateway 삭제"
+                echo "  aws ec2 delete-nat-gateway --nat-gateway-id $nat_gateway_2"
+            else
+                log_error "사용 가능한 퍼블릭 서브넷을 찾을 수 없습니다."
+                log_info "수동으로 퍼블릭 서브넷을 생성하거나 기존 퍼블릭 서브넷을 확인하세요."
+            fi
+            
+            return 1
         fi
         
         local route_table_2=$(get_route_table_id "$eks_subnet_2")
