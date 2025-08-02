@@ -1,0 +1,60 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: timeline-server
+  namespace: sns
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: timeline-server
+  template:
+    metadata:
+      labels:
+        app: timeline-server
+    spec:
+      containers:
+        - name: timeline
+          image: {ecr주소}/timeline-server:0.0.1
+          imagePullPolicy: Always
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: dev
+          envFrom:
+          - configMapRef:
+              name: kafka-config
+          - configMapRef:
+              name: redis-config
+          - secretRef:
+              name: kafka-secret
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh","-c","sleep 10"]
+          readinessProbe:
+            httpGet:
+              path: /healthcheck/ready
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthcheck/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 1
+            failureThreshold: 7

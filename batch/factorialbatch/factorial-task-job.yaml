@@ -1,0 +1,19 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: factorial-batch
+  namespace: factorial
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    spec:
+      parallelism: 3
+      completions: 3
+      backoffLimit: 3
+      ttlSecondsAfterFinished: 10
+      template:
+        spec:
+          containers:
+            - name: factorial-worker
+              image: jheo/factorial-batch:0.0.1
+          restartPolicy: Never
