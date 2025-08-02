@@ -320,122 +320,18 @@ fix_routing() {
     done
 }
 
-# 5. NAT Gateway 수정
-fix_nat_gateways() {
-    log_info "NAT Gateway 수정 중..."
-    
-    # 새로운 NAT Gateway 수정 스크립트 사용
+# 기본 NAT Gateway 수정 함수 (fix_nat_gateway.sh 활용)
+fix_nat_gateways_basic() {
+    # fix_nat_gateway.sh 스크립트 실행
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     NAT_FIX_SCRIPT="$SCRIPT_DIR/../utils/fix_nat_gateway.sh"
     
     if [[ -f "$NAT_FIX_SCRIPT" ]]; then
-        log_info "상세한 NAT Gateway 수정 스크립트 실행 중..."
-        
-        # 사용자 확인 없이 자동 실행
-        echo "y" | "$NAT_FIX_SCRIPT"
-        
-        if [[ $? -eq 0 ]]; then
-            log_success "NAT Gateway 수정 스크립트가 성공적으로 완료되었습니다."
-        else
-            log_error "NAT Gateway 수정 스크립트 실행 중 오류가 발생했습니다."
-            log_warning "기본 NAT Gateway 수정을 시도합니다."
-            
-            # 기본 NAT Gateway 수정 (기존 로직)
-            fix_nat_gateways_basic
-        fi
+        log_info "NAT Gateway 전용 수정 스크립트 실행 중..."
+        "$NAT_FIX_SCRIPT"
     else
-        log_warning "NAT Gateway 수정 스크립트를 찾을 수 없습니다. 기본 수정을 실행합니다."
-        fix_nat_gateways_basic
-    fi
-}
-
-# 기본 NAT Gateway 수정 함수 (기존 로직)
-fix_nat_gateways_basic() {
-    CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
-    VPC_ID=$(echo "$CLUSTER_INFO" | jq -r ".cluster.resourcesVpcConfig.vpcId")
-    
-    # NAT Gateway 확인
-    NAT_GATEWAYS=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" --region $REGION --query "NatGateways[]" --output json 2>/dev/null)
-    
-    if [[ "$NAT_GATEWAYS" != "[]" ]]; then
-        echo "$NAT_GATEWAYS" | jq -r '.[] | "\(.NatGatewayId)|\(.SubnetId)"' | while IFS='|' read -r nat_id subnet_id; do
-            log_info "NAT Gateway 확인 중: $nat_id (서브넷: $subnet_id)"
-            
-            # NAT Gateway 서브넷의 라우팅 테이블 확인
-            ROUTE_TABLE=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$subnet_id" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null)
-            
-            if [[ "$ROUTE_TABLE" != "None" && -n "$ROUTE_TABLE" ]]; then
-                # NAT Gateway 서브넷이 Internet Gateway로 라우팅되는지 확인
-                IGW_ROUTE=$(aws ec2 describe-route-tables --route-table-ids $ROUTE_TABLE --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].GatewayId" --output text 2>/dev/null)
-                
-                if [[ "$IGW_ROUTE" == *"igw-"* ]]; then
-                    log_success "NAT Gateway 서브넷 라우팅 정상: Internet Gateway로 라우팅됨"
-                else
-                    log_warning "NAT Gateway 서브넷 라우팅 문제 수정 중..."
-                    
-                    # Internet Gateway ID 가져오기
-                    IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query "InternetGateways[0].InternetGatewayId" --output text 2>/dev/null)
-                    
-                    if [[ "$IGW_ID" != "None" && -n "$IGW_ID" ]]; then
-                        # 기존 0.0.0.0/0 라우트 삭제
-                        aws ec2 delete-route --route-table-id $ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --region $REGION 2>/dev/null
-                        
-                        # Internet Gateway로 새 라우트 추가
-                        aws ec2 create-route --route-table-id $ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --gateway-id $IGW_ID --region $REGION
-                        
-                        if [[ $? -eq 0 ]]; then
-                            log_success "NAT Gateway 서브넷 라우팅 수정 완료: Internet Gateway로 라우팅됨"
-                        else
-                            log_error "NAT Gateway 서브넷 라우팅 수정 실패"
-                        fi
-                    else
-                        log_error "Internet Gateway를 찾을 수 없습니다"
-                    fi
-                fi
-            else
-                log_error "NAT Gateway 서브넷 라우팅 테이블을 찾을 수 없음"
-            fi
-        done
-        
-        # 노드그룹 서브넷들이 NAT Gateway로 라우팅되는지 확인 및 수정
-        log_info "노드그룹 서브넷 NAT Gateway 라우팅 확인 중..."
-        SUBNET_IDS=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.subnetIds[]' 2>/dev/null)
-        
-        for SUBNET_ID in $SUBNET_IDS; do
-            ROUTE_TABLE=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$SUBNET_ID" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null)
-            
-            if [[ "$ROUTE_TABLE" != "None" && -n "$ROUTE_TABLE" ]]; then
-                NAT_ROUTE=$(aws ec2 describe-route-tables --route-table-ids $ROUTE_TABLE --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].NatGatewayId" --output text 2>/dev/null)
-                
-                if [[ "$NAT_ROUTE" == *"nat-"* ]]; then
-                    log_success "노드그룹 서브넷 $SUBNET_ID: NAT Gateway로 라우팅됨 ($NAT_ROUTE)"
-                else
-                    log_warning "노드그룹 서브넷 $SUBNET_ID: NAT Gateway로 라우팅되지 않음 - 수정 중..."
-                    
-                    # 사용 가능한 NAT Gateway 가져오기
-                    AVAILABLE_NAT=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" --query "NatGateways[0].NatGatewayId" --output text 2>/dev/null)
-                    
-                    if [[ "$AVAILABLE_NAT" != "None" && -n "$AVAILABLE_NAT" ]]; then
-                        # 기존 0.0.0.0/0 라우트 삭제
-                        aws ec2 delete-route --route-table-id $ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --region $REGION 2>/dev/null
-                        
-                        # NAT Gateway로 새 라우트 추가
-                        aws ec2 create-route --route-table-id $ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --nat-gateway-id $AVAILABLE_NAT --region $REGION
-                        
-                        if [[ $? -eq 0 ]]; then
-                            log_success "노드그룹 서브넷 $SUBNET_ID: NAT Gateway 라우팅 수정 완료 ($AVAILABLE_NAT)"
-                        else
-                            log_error "노드그룹 서브넷 $SUBNET_ID: NAT Gateway 라우팅 수정 실패"
-                        fi
-                    else
-                        log_error "사용 가능한 NAT Gateway를 찾을 수 없습니다"
-                    fi
-                fi
-            fi
-        done
-    else
-        log_error "사용 가능한 NAT Gateway를 찾을 수 없습니다"
-        log_warning "NAT Gateway가 없으면 프라이빗 서브넷의 노드들이 인터넷에 접근할 수 없습니다"
+        log_error "NAT Gateway 수정 스크립트를 찾을 수 없습니다: $NAT_FIX_SCRIPT"
+        return 1
     fi
 }
 
@@ -695,7 +591,7 @@ main_fix() {
             fix_routing
             ;;
         "nat")
-            fix_nat_gateways
+            fix_nat_gateways_basic
             ;;
         "security")
             fix_security_groups
@@ -711,7 +607,7 @@ main_fix() {
             fix_cni
             fix_iam_policies
             fix_routing
-            fix_nat_gateways
+            fix_nat_gateways_basic
             fix_security_groups
             fix_container_internet_access
             ;;
