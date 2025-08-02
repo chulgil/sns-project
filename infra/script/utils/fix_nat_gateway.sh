@@ -232,11 +232,8 @@ main() {
     log_info "NAT Gateway 수정 스크립트 시작..."
     echo "=================================="
     
-    # 사용자 확인
-    if ! confirm_action "NAT Gateway 라우팅을 수정하시겠습니까?"; then
-        log_info "작업이 취소되었습니다."
-        exit 0
-    fi
+    # 사용자 확인 없이 바로 실행
+    log_info "NAT Gateway 라우팅을 자동으로 수정합니다..."
     
     # 수정 실행
     fix_nat_gateway_routing

@@ -48,6 +48,53 @@ log_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
+# NAT Gateway 체크
+check_nat_gateways() {
+    log_info "Checking NAT Gateway configuration..."
+    
+    # NAT Gateway 상태 확인
+    NAT_GATEWAYS=$(aws ec2 describe-nat-gateways --query 'NatGateways[?State==`available`].[NatGatewayId,SubnetId]' --output json 2>/dev/null)
+    
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to get NAT Gateway information"
+        return 1
+    fi
+    
+    NAT_COUNT=$(echo "$NAT_GATEWAYS" | jq 'length')
+    if [[ $NAT_COUNT -lt 2 ]]; then
+        log_warning "Only $NAT_COUNT NAT Gateway(s) found. For high availability, 2 NAT Gateways are recommended."
+    else
+        log_success "Found $NAT_COUNT NAT Gateway(s)"
+    fi
+    
+    # EKS 서브넷 확인
+    EKS_SUBNETS=$(aws eks describe-cluster --name $CLUSTER_NAME --query 'cluster.resourcesVpcConfig.subnetIds' --output json 2>/dev/null)
+    
+    if [[ $? -ne 0 ]]; then
+        log_error "Failed to get EKS subnet information"
+        return 1
+    fi
+    
+    # 각 서브넷의 라우팅 테이블 확인
+    for subnet in $(echo "$EKS_SUBNETS" | jq -r '.[]'); do
+        ROUTE_TABLE=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$subnet" --query 'RouteTables[0].RouteTableId' --output text 2>/dev/null)
+        
+        if [[ "$ROUTE_TABLE" != "None" && -n "$ROUTE_TABLE" ]]; then
+            NAT_ROUTE=$(aws ec2 describe-route-tables --route-table-ids $ROUTE_TABLE --query 'RouteTables[0].Routes[?DestinationCidrBlock==`0.0.0.0/0`].NatGatewayId' --output text 2>/dev/null)
+            
+            if [[ "$NAT_ROUTE" == *"nat-"* ]]; then
+                log_success "Subnet $subnet has NAT Gateway route: $NAT_ROUTE"
+            else
+                log_warning "Subnet $subnet does not have NAT Gateway route"
+            fi
+        else
+            log_warning "Could not find route table for subnet $subnet"
+        fi
+    done
+    
+    return 0
+}
+
 # 사전 체크
 pre_check() {
     log_info "Running pre-checks..."
@@ -85,6 +132,11 @@ pre_check() {
     fi
     
     log_success "IAM role exists: $NODE_ROLE_NAME"
+    
+    # NAT Gateway 체크
+    if ! check_nat_gateways; then
+        log_warning "NAT Gateway check failed, but continuing with node group creation"
+    fi
     
     return 0
 }
