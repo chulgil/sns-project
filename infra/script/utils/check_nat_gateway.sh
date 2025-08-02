@@ -132,6 +132,65 @@ check_nat_gateway_ips() {
     fi
 }
 
+# NAT Gateway 서브넷의 Internet Gateway 라우팅 확인
+check_nat_gateway_subnet_routing() {
+    log_info "NAT Gateway 서브넷의 Internet Gateway 라우팅 확인 중..."
+    
+    # NAT Gateway 목록 가져오기
+    local nat_gateways=$(aws ec2 describe-nat-gateways --query 'NatGateways[*].[NatGatewayId,SubnetId]' --output json 2>/dev/null)
+    
+    if [[ $? -ne 0 ]]; then
+        log_error "NAT Gateway 정보를 가져오는데 실패했습니다."
+        return 1
+    fi
+    
+    # EKS 서브넷 목록 가져오기
+    local eks_subnets=$(aws eks describe-cluster --name $CLUSTER_NAME --query 'cluster.resourcesVpcConfig.subnetIds' --output json 2>/dev/null | jq -r '.[]')
+    
+    # 각 NAT Gateway의 서브넷 확인
+    echo "$nat_gateways" | jq -r '.[] | "\(.[0])|\(.[1])"' | while IFS='|' read -r nat_id subnet_id; do
+        if [[ -n "$nat_id" && -n "$subnet_id" ]]; then
+            log_info "NAT Gateway $nat_id (서브넷: $subnet_id) 확인 중..."
+            
+            # NAT Gateway 서브넷이 EKS 서브넷과 동일한지 확인
+            local is_eks_subnet=false
+            for eks_subnet in $eks_subnets; do
+                if [[ "$subnet_id" == "$eks_subnet" ]]; then
+                    is_eks_subnet=true
+                    break
+                fi
+            done
+            
+            if [[ "$is_eks_subnet" == "true" ]]; then
+                log_warning "  NAT Gateway $nat_id 가 EKS 서브넷과 동일한 서브넷에 있습니다."
+                log_warning "  이는 권장되지 않는 구성입니다. NAT Gateway는 별도의 퍼블릭 서브넷에 있어야 합니다."
+                echo "  라우팅 테이블: (EKS 서브넷과 공유)"
+                echo "  NAT Gateway: $nat_id"
+                log_success "  NAT Gateway $nat_id 는 EKS 서브넷에서 직접 사용됩니다."
+            else
+                # NAT Gateway 서브넷의 라우팅 테이블 확인
+                local route_table=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$subnet_id" --query 'RouteTables[0]' --output json 2>/dev/null)
+                
+                if [[ $? -eq 0 && "$route_table" != "null" ]]; then
+                    local route_table_id=$(echo "$route_table" | jq -r '.RouteTableId')
+                    local internet_gateway=$(echo "$route_table" | jq -r '.Routes[] | select(.DestinationCidrBlock=="0.0.0.0/0") | .GatewayId // "N/A"')
+                    
+                    echo "  라우팅 테이블: $route_table_id"
+                    
+                    if [[ "$internet_gateway" != "N/A" ]]; then
+                        echo "  Internet Gateway: $internet_gateway"
+                        log_success "  NAT Gateway 서브넷 $subnet_id 는 Internet Gateway로 라우팅됩니다."
+                    else
+                        log_error "  NAT Gateway 서브넷 $subnet_id 에 Internet Gateway 라우트가 없습니다."
+                    fi
+                else
+                    log_error "NAT Gateway 서브넷 $subnet_id 의 라우팅 테이블을 찾을 수 없습니다."
+                fi
+            fi
+        fi
+    done
+}
+
 # 인터넷 연결 테스트
 test_internet_connectivity() {
     log_info "인터넷 연결 테스트 중..."
@@ -177,11 +236,15 @@ main() {
     check_routing_tables
     echo ""
     
-    # 4. NAT Gateway IP 주소 확인
+    # 4. NAT Gateway 서브넷의 Internet Gateway 라우팅 확인
+    check_nat_gateway_subnet_routing
+    echo ""
+    
+    # 5. NAT Gateway IP 주소 확인
     check_nat_gateway_ips
     echo ""
     
-    # 5. 인터넷 연결 테스트
+    # 6. 인터넷 연결 테스트
     test_internet_connectivity
     echo ""
     

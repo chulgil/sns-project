@@ -145,8 +145,27 @@ map_nat_gateways_to_subnets() {
     echo "  EKS 서브넷 1: $eks_subnet_1"
     echo "  EKS 서브넷 2: $eks_subnet_2"
     
+    # NAT Gateway 서브넷이 EKS 서브넷과 동일한지 확인하는 함수
+    is_nat_gateway_in_eks_subnet() {
+        local nat_subnet="$1"
+        local eks_subnets="$2"
+        
+        for eks_subnet in $(echo "$eks_subnets" | jq -r '.[]'); do
+            if [[ "$nat_subnet" == "$eks_subnet" ]]; then
+                return 0  # true
+            fi
+        done
+        return 1  # false
+    }
+    
     # 각 EKS 서브넷에 적절한 NAT Gateway 할당
     if [[ -n "$eks_subnet_1" && -n "$nat_gateway_1" ]]; then
+        # NAT Gateway 1이 EKS 서브넷과 동일한 서브넷에 있는지 확인
+        if is_nat_gateway_in_eks_subnet "$nat_gateway_1_subnet" "$eks_subnets"; then
+            log_warning "NAT Gateway 1이 EKS 서브넷과 동일한 서브넷에 있습니다."
+            log_warning "이는 권장되지 않는 구성이지만, 기능적으로는 작동합니다."
+        fi
+        
         local route_table_1=$(get_route_table_id "$eks_subnet_1")
         if [[ $? -eq 0 ]]; then
             fix_nat_gateway_route "$route_table_1" "$nat_gateway_1"
@@ -154,6 +173,12 @@ map_nat_gateways_to_subnets() {
     fi
     
     if [[ -n "$eks_subnet_2" && -n "$nat_gateway_2" ]]; then
+        # NAT Gateway 2가 EKS 서브넷과 동일한 서브넷에 있는지 확인
+        if is_nat_gateway_in_eks_subnet "$nat_gateway_2_subnet" "$eks_subnets"; then
+            log_warning "NAT Gateway 2가 EKS 서브넷과 동일한 서브넷에 있습니다."
+            log_warning "이는 권장되지 않는 구성이지만, 기능적으로는 작동합니다."
+        fi
+        
         local route_table_2=$(get_route_table_id "$eks_subnet_2")
         if [[ $? -eq 0 ]]; then
             fix_nat_gateway_route "$route_table_2" "$nat_gateway_2"
