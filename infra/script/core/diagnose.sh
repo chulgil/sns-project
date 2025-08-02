@@ -12,12 +12,12 @@ if [[ -z "$CLUSTER_NAME" ]]; then
   exit 1
 fi
 
-echo "🔍 EKS Node Group Diagnosis Tool"
+echo "🔍 EKS 노드그룹 진단 도구"
 echo "================================"
-echo "Cluster: $CLUSTER_NAME"
-echo "Node Group: $NODEGROUP_NAME"
-echo "Level: $DIAGNOSIS_LEVEL"
-echo "Region: $REGION"
+echo "클러스터: $CLUSTER_NAME"
+echo "노드그룹: $NODEGROUP_NAME"
+echo "진단 레벨: $DIAGNOSIS_LEVEL"
+echo "리전: $REGION"
 echo ""
 
 # 색상 정의
@@ -46,7 +46,7 @@ log_error() {
 
 # 1. 클러스터 상태 확인
 check_cluster_status() {
-    log_info "Checking EKS cluster status..."
+    log_info "EKS 클러스터 상태 확인 중..."
     
     CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION 2>/dev/null)
     if [[ $? -eq 0 ]]; then
@@ -55,23 +55,23 @@ check_cluster_status() {
         VPC_ID=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.vpcId')
         
         if [[ "$CLUSTER_STATUS" == "ACTIVE" ]]; then
-            log_success "Cluster Status: $CLUSTER_STATUS"
-            log_success "Cluster Version: $CLUSTER_VERSION"
+            log_success "클러스터 상태: $CLUSTER_STATUS"
+            log_success "클러스터 버전: $CLUSTER_VERSION"
             log_success "VPC ID: $VPC_ID"
             return 0
         else
-            log_error "Cluster Status: $CLUSTER_STATUS"
+            log_error "클러스터 상태: $CLUSTER_STATUS"
             return 1
         fi
     else
-        log_error "Failed to get cluster info"
+        log_error "클러스터 정보 조회 실패"
         return 1
     fi
 }
 
 # 2. EKS 애드온 확인
 check_eks_addons() {
-    log_info "Checking EKS addons..."
+    log_info "EKS 애드온 확인 중..."
     
     ADDONS=$(aws eks list-addons --cluster-name $CLUSTER_NAME --region $REGION --query "addons" --output text 2>/dev/null)
     
@@ -88,19 +88,19 @@ check_eks_addons() {
             fi
         done
     else
-        log_warning "No addons found"
+        log_warning "애드온을 찾을 수 없음"
     fi
 }
 
 # 3. IAM 역할 확인
 check_iam_roles() {
-    log_info "Checking IAM roles..."
+    log_info "IAM 역할 확인 중..."
     
     NODE_ROLE_NAME="EKS-NodeGroup-Role"
     ROLE_INFO=$(aws iam get-role --role-name $NODE_ROLE_NAME 2>/dev/null)
     
     if [[ $? -eq 0 ]]; then
-        log_success "Node role exists: $NODE_ROLE_NAME"
+        log_success "노드 역할 존재: $NODE_ROLE_NAME"
         
         # 연결된 정책 확인
         ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name $NODE_ROLE_NAME --query "AttachedPolicies[].PolicyName" --output text 2>/dev/null)
@@ -108,19 +108,19 @@ check_iam_roles() {
         
         for POLICY in "${REQUIRED_POLICIES[@]}"; do
             if [[ "$ATTACHED_POLICIES" == *"$POLICY"* ]]; then
-                log_success "Policy attached: $POLICY"
+                log_success "정책 연결됨: $POLICY"
             else
-                log_error "Policy missing: $POLICY"
+                log_error "정책 누락: $POLICY"
             fi
         done
     else
-        log_error "Node role does not exist: $NODE_ROLE_NAME"
+        log_error "노드 역할이 존재하지 않음: $NODE_ROLE_NAME"
     fi
 }
 
 # 4. 서브넷 확인
 check_subnets() {
-    log_info "Checking subnets..."
+    log_info "서브넷 확인 중..."
     
     SUBNET_IDS=("subnet-0d1bf6af96eba2b10" "subnet-0436c6d3f4296c972")
     
@@ -132,7 +132,7 @@ check_subnets() {
             CIDR=$(echo "$SUBNET_INFO" | jq -r '.CidrBlock')
             VPC_ID_SUBNET=$(echo "$SUBNET_INFO" | jq -r '.VpcId')
             
-            log_success "Subnet $SUBNET_ID:"
+            log_success "서브넷 $SUBNET_ID:"
             echo "  AZ: $AZ"
             echo "  CIDR: $CIDR"
             echo "  VPC: $VPC_ID_SUBNET"
@@ -140,19 +140,19 @@ check_subnets() {
             # 라우팅 테이블 확인
             ROUTE_TABLE=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$SUBNET_ID" --region $REGION --query "RouteTables[0].RouteTableId" --output text 2>/dev/null)
             if [[ "$ROUTE_TABLE" != "None" && -n "$ROUTE_TABLE" ]]; then
-                log_success "  Route Table: $ROUTE_TABLE"
+                log_success "  라우팅 테이블: $ROUTE_TABLE"
             else
-                log_error "  No route table found"
+                log_error "  라우팅 테이블을 찾을 수 없음"
             fi
         else
-            log_error "Failed to get subnet info: $SUBNET_ID"
+            log_error "서브넷 정보 조회 실패: $SUBNET_ID"
         fi
     done
 }
 
 # 5. VPC 엔드포인트 확인
 check_vpc_endpoints() {
-    log_info "Checking VPC endpoints..."
+    log_info "VPC 엔드포인트 확인 중..."
     
     CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
     VPC_ID=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.vpcId')
@@ -168,65 +168,70 @@ check_vpc_endpoints() {
             fi
         done
     else
-        log_warning "No VPC endpoints found"
+        log_warning "VPC 엔드포인트를 찾을 수 없음"
     fi
 }
 
 # 6. 보안 그룹 확인
 check_security_groups() {
-    log_info "Checking security groups..."
+    log_info "보안 그룹 확인 중..."
     
     CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
     CLUSTER_SG=$(echo "$CLUSTER_INFO" | jq -r ".cluster.resourcesVpcConfig.clusterSecurityGroupId")
     
     if [[ "$CLUSTER_SG" != "null" && -n "$CLUSTER_SG" ]]; then
-        log_success "Cluster Security Group: $CLUSTER_SG"
+        log_success "클러스터 보안 그룹: $CLUSTER_SG"
         
         # 인바운드 규칙 확인
         INBOUND_RULES=$(aws ec2 describe-security-groups --group-ids $CLUSTER_SG --region $REGION --query "SecurityGroups[0].IpPermissions" --output json 2>/dev/null)
         
         # 포트 443 확인
         if [[ "$INBOUND_RULES" == *'"FromPort": 443'* ]] || [[ "$INBOUND_RULES" == *'"ToPort": 443'* ]]; then
-            log_success "Required port range found: 443"
+            log_success "필수 포트 범위 발견: 443"
         else
-            log_error "Required port range missing: 443"
+            log_error "필수 포트 범위 누락: 443"
         fi
         
         # 포트 범위 1025-65535 확인 (FromPort: 1025, ToPort: 65535)
         if [[ "$INBOUND_RULES" == *'"FromPort": 1025'* ]] && [[ "$INBOUND_RULES" == *'"ToPort": 65535'* ]]; then
-            log_success "Required port range found: 1025-65535"
+            log_success "필수 포트 범위 발견: 1025-65535"
         else
-            log_error "Required port range missing: 1025-65535"
+            log_error "필수 포트 범위 누락: 1025-65535"
         fi
     else
-        log_error "No cluster security group found"
+        log_error "클러스터 보안 그룹을 찾을 수 없음"
     fi
 }
 
 # 7. aws-auth ConfigMap 확인
 check_aws_auth() {
-    log_info "Checking aws-auth ConfigMap..."
+    log_info "aws-auth ConfigMap 확인 중..."
     
     AUTH_CONFIG=$(kubectl get configmap aws-auth -n kube-system --output=yaml 2>/dev/null)
     
     if [[ $? -eq 0 ]]; then
-        log_success "aws-auth ConfigMap exists"
+        log_success "aws-auth ConfigMap 존재"
         
-        # 노드 역할 매핑 확인
-        if [[ "$AUTH_CONFIG" == *"EKS-NodeGroup-Role"* ]]; then
-            log_success "Node role mapping exists in aws-auth"
+        # mapRoles 섹션에서 노드 역할 매핑 확인
+        if echo "$AUTH_CONFIG" | grep -A 10 "mapRoles:" | grep -q "EKS-NodeGroup-Role"; then
+            # 올바른 형식으로 매핑되어 있는지 확인
+            if echo "$AUTH_CONFIG" | grep -A 10 "mapRoles:" | grep -q "system:node:" && echo "$AUTH_CONFIG" | grep -A 10 "mapRoles:" | grep -q "system:nodes"; then
+                log_success "aws-auth에 노드 역할 매핑 존재"
+            else
+                log_error "aws-auth의 노드 역할 매핑 형식이 잘못됨"
+            fi
         else
-            log_error "Node role mapping missing in aws-auth"
+            log_error "aws-auth mapRoles 섹션에 노드 역할 매핑 누락"
         fi
     else
-        log_error "aws-auth ConfigMap not found"
+        log_error "aws-auth ConfigMap을 찾을 수 없음"
     fi
 }
 
 # 8. 노드그룹 상태 확인 (노드그룹이 있는 경우)
 check_nodegroup_status() {
     if [[ -n "$NODEGROUP_NAME" ]]; then
-        log_info "Checking node group status..."
+        log_info "노드그룹 상태 확인 중..."
         
         NODEGROUP_INFO=$(aws eks describe-nodegroup --cluster-name $CLUSTER_NAME --nodegroup-name $NODEGROUP_NAME --region $REGION 2>/dev/null)
         
@@ -235,33 +240,33 @@ check_nodegroup_status() {
             HEALTH_ISSUES=$(echo "$NODEGROUP_INFO" | jq -r '.nodegroup.health.issues | length')
             
             if [[ "$STATUS" == "ACTIVE" ]]; then
-                log_success "Node Group Status: $STATUS"
+                log_success "노드그룹 상태: $STATUS"
             else
-                log_warning "Node Group Status: $STATUS"
+                log_warning "노드그룹 상태: $STATUS"
             fi
             
             if [[ $HEALTH_ISSUES -gt 0 ]]; then
-                log_error "Health Issues: $HEALTH_ISSUES"
+                log_error "건강 상태 문제: $HEALTH_ISSUES"
                 echo "$NODEGROUP_INFO" | jq -r '.nodegroup.health.issues[] | "  - \(.code): \(.message)"'
             fi
         else
-            log_warning "Node group not found: $NODEGROUP_NAME"
+            log_warning "노드그룹을 찾을 수 없음: $NODEGROUP_NAME"
         fi
     fi
 }
 
 # 9. 네트워크 연결성 테스트
 check_connectivity() {
-    log_info "Checking network connectivity..."
+    log_info "네트워크 연결성 확인 중..."
     
     CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
     ENDPOINT=$(echo "$CLUSTER_INFO" | jq -r ".cluster.endpoint")
     ENDPOINT_HOST=$(echo $ENDPOINT | sed 's|https://||')
     
     if nc -z -w5 $ENDPOINT_HOST 443 2>/dev/null; then
-        log_success "Cluster endpoint is reachable"
+        log_success "클러스터 엔드포인트 연결 가능"
     else
-        log_error "Cluster endpoint is NOT reachable"
+        log_error "클러스터 엔드포인트 연결 불가"
     fi
 }
 
@@ -293,7 +298,7 @@ main_diagnosis() {
             check_connectivity
             ;;
         *)
-            log_error "Invalid diagnosis level: $DIAGNOSIS_LEVEL"
+            log_error "잘못된 진단 레벨: $DIAGNOSIS_LEVEL"
             exit 1
             ;;
     esac
@@ -303,9 +308,9 @@ main_diagnosis() {
 main_diagnosis
 
 echo ""
-log_info "Diagnosis completed!"
+log_info "진단 완료!"
 echo ""
-echo "💡 Next steps:"
-echo "1. If all checks pass, you can create the node group"
-echo "2. If issues found, run: ./core/fix.sh $CLUSTER_NAME"
-echo "3. For monitoring: ./core/monitor.sh $CLUSTER_NAME $NODEGROUP_NAME" 
+echo "💡 다음 단계:"
+echo "1. 모든 검사가 통과하면 노드그룹을 생성할 수 있습니다"
+echo "2. 문제가 발견되면 실행: ./core/fix.sh $CLUSTER_NAME"
+echo "3. 모니터링을 위해 실행: ./core/monitor.sh $CLUSTER_NAME $NODEGROUP_NAME" 
