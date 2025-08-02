@@ -7,7 +7,7 @@ REGION="ap-northeast-2"
 
 if [[ -z "$CLUSTER_NAME" ]]; then
   echo "사용법: $0 <클러스터-이름> [수정-유형]"
-  echo "수정 유형: all, aws-auth, cni, routing, security, ports, internet (기본값: all)"
+  echo "수정 유형: all, aws-auth, cni, iam, routing, security, ports, internet (기본값: all)"
   exit 1
 fi
 
@@ -186,7 +186,64 @@ fix_cni() {
     fi
 }
 
-# 3. 라우팅 테이블 수정
+# 3. IAM 정책 수정
+fix_iam_policies() {
+    log_info "IAM 정책 수정 중..."
+    
+    NODE_ROLE_NAME="EKS-NodeGroup-Role"
+    
+    # 역할 존재 확인
+    ROLE_EXISTS=$(aws iam get-role --role-name $NODE_ROLE_NAME 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+        log_error "노드 역할이 존재하지 않습니다: $NODE_ROLE_NAME"
+        return 1
+    fi
+    
+    log_success "노드 역할 존재: $NODE_ROLE_NAME"
+    
+    # 현재 연결된 정책 확인
+    ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name $NODE_ROLE_NAME --query "AttachedPolicies[].PolicyName" --output text 2>/dev/null)
+    
+    # 필수 정책 목록
+    REQUIRED_POLICIES=("AmazonEKSWorkerNodePolicy" "AmazonEKS_CNI_Policy" "AmazonEC2ContainerRegistryReadOnly" "AmazonEC2FullAccess")
+    
+    for POLICY in "${REQUIRED_POLICIES[@]}"; do
+        if [[ "$ATTACHED_POLICIES" == *"$POLICY"* ]]; then
+            log_success "정책 이미 연결됨: $POLICY"
+        else
+            log_info "정책 추가 중: $POLICY"
+            
+            case $POLICY in
+                "AmazonEKSWorkerNodePolicy")
+                    POLICY_ARN="arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
+                    ;;
+                "AmazonEKS_CNI_Policy")
+                    POLICY_ARN="arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
+                    ;;
+                "AmazonEC2ContainerRegistryReadOnly")
+                    POLICY_ARN="arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
+                    ;;
+                "AmazonEC2FullAccess")
+                    POLICY_ARN="arn:aws:iam::aws:policy/AmazonEC2FullAccess"
+                    ;;
+                *)
+                    log_error "알 수 없는 정책: $POLICY"
+                    continue
+                    ;;
+            esac
+            
+            aws iam attach-role-policy --role-name $NODE_ROLE_NAME --policy-arn $POLICY_ARN
+            
+            if [[ $? -eq 0 ]]; then
+                log_success "정책 추가됨: $POLICY"
+            else
+                log_error "정책 추가 실패: $POLICY"
+            fi
+        fi
+    done
+}
+
+# 4. 라우팅 테이블 수정
 fix_routing() {
     log_info "라우팅 테이블 수정 중..."
     
@@ -263,7 +320,7 @@ fix_routing() {
     done
 }
 
-# 4. 보안 그룹 수정
+# 5. 보안 그룹 수정
 fix_security_groups() {
     log_info "보안 그룹 규칙 수정 중..."
     
@@ -409,7 +466,7 @@ fix_security_groups() {
     fi
 }
 
-# 5. 컨테이너 인터넷 접근 수정
+# 6. 컨테이너 인터넷 접근 수정
 fix_container_internet_access() {
     log_info "컨테이너 인터넷 접근 수정 중..."
     
@@ -512,6 +569,9 @@ main_fix() {
         "cni")
             fix_cni
             ;;
+        "iam")
+            fix_iam_policies
+            ;;
         "routing")
             fix_routing
             ;;
@@ -527,6 +587,7 @@ main_fix() {
         "all")
             fix_aws_auth
             fix_cni
+            fix_iam_policies
             fix_routing
             fix_security_groups
             fix_container_internet_access

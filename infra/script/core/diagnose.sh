@@ -158,7 +158,7 @@ check_iam_roles() {
         
         # 연결된 정책 확인
         ATTACHED_POLICIES=$(aws iam list-attached-role-policies --role-name $NODE_ROLE_NAME --query "AttachedPolicies[].PolicyName" --output text 2>/dev/null)
-        REQUIRED_POLICIES=("AmazonEKSWorkerNodePolicy" "AmazonEKS_CNI_Policy" "AmazonEC2ContainerRegistryReadOnly")
+        REQUIRED_POLICIES=("AmazonEKSWorkerNodePolicy" "AmazonEKS_CNI_Policy" "AmazonEC2ContainerRegistryReadOnly" "AmazonEC2FullAccess")
         
         for POLICY in "${REQUIRED_POLICIES[@]}"; do
             if [[ "$ATTACHED_POLICIES" == *"$POLICY"* ]]; then
