@@ -42,19 +42,68 @@ log_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
+# AWS STS 상태 확인
+check_aws_sts() {
+    log_info "Checking AWS STS status..."
+    
+    CALLER_IDENTITY=$(aws sts get-caller-identity 2>/dev/null)
+    if [[ $? -ne 0 ]]; then
+        log_error "AWS 자격 증명이 설정되지 않았거나 유효하지 않습니다."
+        echo "해결 방법: aws configure 또는 환경 변수 설정"
+        return 1
+    fi
+    
+    USER_ID=$(echo "$CALLER_IDENTITY" | jq -r '.UserId')
+    ACCOUNT_ID=$(echo "$CALLER_IDENTITY" | jq -r '.Account')
+    ARN=$(echo "$CALLER_IDENTITY" | jq -r '.Arn')
+    
+    log_success "AWS 자격 증명이 정상적으로 설정되어 있습니다!"
+    echo "  사용자 ID: $USER_ID"
+    echo "  계정 번호: $ACCOUNT_ID"
+    echo "  ARN: $ARN"
+    
+    return 0
+}
+
 # 1. aws-auth ConfigMap 수정
 fix_aws_auth() {
     log_info "Fixing aws-auth ConfigMap..."
     
-    # 백업 생성
-    BACKUP_FILE="aws-auth-backup-$(date +%Y%m%d-%H%M%S).yaml"
-    kubectl get configmap aws-auth -n kube-system -o yaml > "$BACKUP_FILE" 2>/dev/null
+    # AWS Account ID 자동 조회
+    ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text --region "$REGION")
+    if [[ -z "$ACCOUNT_ID" ]]; then
+        log_error "AWS Account ID를 가져오지 못했습니다. AWS CLI 자격 증명을 확인하세요."
+        return 1
+    fi
+    
+    # kubectl 컨텍스트 업데이트 (역할 문제 해결)
+    log_info "Updating kubectl context..."
+    aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
     
     if [[ $? -eq 0 ]]; then
-        log_success "Backup created: $BACKUP_FILE"
+        log_success "kubectl context updated successfully"
     else
-        log_warning "Could not create backup"
+        log_warning "Could not update kubectl context"
     fi
+    
+    # 백업 생성 (ConfigMap이 존재하는 경우에만)
+    log_info "Creating backup of existing aws-auth ConfigMap..."
+    if kubectl get configmap aws-auth -n kube-system >/dev/null 2>&1; then
+        BACKUP_FILE="aws-auth-backup-$(date +%Y%m%d-%H%M%S).yaml"
+        kubectl get configmap aws-auth -n kube-system -o yaml > "$BACKUP_FILE" 2>/dev/null
+        
+        if [[ $? -eq 0 ]]; then
+            log_success "Backup created: $BACKUP_FILE"
+        else
+            log_warning "Could not create backup"
+        fi
+    else
+        log_info "No existing aws-auth ConfigMap found, skipping backup"
+    fi
+    
+    # 현재 사용자 정보 가져오기
+    CURRENT_USER_ARN=$(aws sts get-caller-identity --query "Arn" --output text)
+    CURRENT_USER_NAME=$(echo "$CURRENT_USER_ARN" | sed 's/.*:user\///')
     
     # 올바른 aws-auth ConfigMap 생성
     cat > aws-auth-fixed.yaml << EOF
@@ -65,22 +114,19 @@ metadata:
   namespace: kube-system
 data:
   mapRoles: |
-    - rolearn: arn:aws:iam::421114334882:role/EKS-NodeGroup-Role
+    - rolearn: arn:aws:iam::$ACCOUNT_ID:role/EKS-NodeGroup-Role
       username: system:node:{{EC2PrivateDNSName}}
       groups:
         - system:bootstrappers
         - system:nodes
-    - rolearn: arn:aws:iam::421114334882:role/EKSAdminRole
-      username: eks-admin-role
+    - rolearn: arn:aws:iam::$ACCOUNT_ID:role/AWSServiceRoleForAmazonEKSNodegroup
+      username: system:node:{{EC2PrivateDNSName}}
       groups:
-        - system:masters
+        - system:bootstrappers
+        - system:nodes
   mapUsers: |
-    - userarn: arn:aws:iam::421114334882:user/infra-admin
-      username: infra-admin
-      groups:
-        - system:masters
-    - userarn: arn:aws:iam::421114334882:user/CGLee
-      username: cglee
+    - userarn: arn:aws:iam::$ACCOUNT_ID:user/$CURRENT_USER_NAME
+      username: $CURRENT_USER_NAME
       groups:
         - system:masters
 EOF
@@ -90,6 +136,7 @@ EOF
     
     if [[ $? -eq 0 ]]; then
         log_success "aws-auth ConfigMap fixed successfully"
+        log_info "Added current user ($CURRENT_USER_NAME) with system:masters permissions"
     else
         log_error "Failed to fix aws-auth ConfigMap"
         return 1
@@ -273,6 +320,13 @@ fix_security_groups() {
 
 # 메인 수정 함수
 main_fix() {
+    # 먼저 AWS STS 상태 확인
+    check_aws_sts
+    if [[ $? -ne 0 ]]; then
+        log_error "AWS STS 상태 확인 실패. 수정 작업을 중단합니다."
+        return 1
+    fi
+    
     case $FIX_TYPE in
         "aws-auth")
             fix_aws_auth

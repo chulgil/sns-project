@@ -12,6 +12,7 @@ infra/script/
 │   ├── fix.sh              # 문제 수정
 │   └── monitor.sh          # 모니터링
 ├── utils/                   # 유틸리티
+│   ├── check_aws_sts.sh    # AWS STS 상태 확인
 │   ├── check_network.sh    # 네트워크 확인
 │   ├── check_network_eks.sh # EKS 네트워크 확인
 │   ├── check_instance_logs.sh # 인스턴스 로그 확인
@@ -161,6 +162,9 @@ infra/script/
 
 ### IAM 관련
 ```bash
+# AWS STS 상태 확인
+./utils/check_aws_sts.sh
+
 # EKS에 IAM 역할 추가
 ./utils/add_iam_to_eks.sh
 ```
@@ -176,6 +180,7 @@ kubectl apply -f configs/aws-auth.yaml
 ## 🎯 주요 기능
 
 ### 진단 기능
+- ✅ AWS STS 상태 확인 (자격 증명, 권한, 사용자 정보)
 - ✅ 클러스터 상태 확인
 - ✅ EKS 애드온 상태 확인
 - ✅ IAM 역할 및 정책 확인

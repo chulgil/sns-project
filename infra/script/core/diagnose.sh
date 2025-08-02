@@ -44,6 +44,60 @@ log_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
+# 0. AWS STS 상태 확인
+check_aws_sts() {
+    log_info "AWS STS 상태 확인 중..."
+    
+    CALLER_IDENTITY=$(aws sts get-caller-identity 2>/dev/null)
+    if [[ $? -eq 0 ]]; then
+        USER_ID=$(echo "$CALLER_IDENTITY" | jq -r '.UserId')
+        ACCOUNT_ID=$(echo "$CALLER_IDENTITY" | jq -r '.Account')
+        ARN=$(echo "$CALLER_IDENTITY" | jq -r '.Arn')
+        
+        log_success "AWS 자격 증명이 정상적으로 설정되어 있습니다!"
+        echo "  사용자 ID: $USER_ID"
+        echo "  계정 번호: $ACCOUNT_ID"
+        echo "  ARN: $ARN"
+        
+        # 사용자 타입 확인
+        if [[ "$ARN" == *":user/"* ]]; then
+            USER_TYPE="IAM User"
+            USER_NAME=$(echo "$ARN" | sed 's/.*:user\///')
+        elif [[ "$ARN" == *":role/"* ]]; then
+            USER_TYPE="IAM Role"
+            USER_NAME=$(echo "$ARN" | sed 's/.*:role\///')
+        elif [[ "$ARN" == *":assumed-role/"* ]]; then
+            USER_TYPE="Assumed Role"
+            USER_NAME=$(echo "$ARN" | sed 's/.*:assumed-role\///' | sed 's/\/.*//')
+        else
+            USER_TYPE="Unknown"
+            USER_NAME="Unknown"
+        fi
+        
+        echo "  사용자 타입: $USER_TYPE"
+        echo "  사용자 이름: $USER_NAME"
+        
+        # EKS 권한 확인 (IAM User인 경우)
+        if [[ "$USER_TYPE" == "IAM User" ]]; then
+            EKS_POLICIES=$(aws iam list-attached-user-policies --user-name "$USER_NAME" --query "AttachedPolicies[?contains(PolicyName, 'EKS') || contains(PolicyName, 'Admin')].PolicyName" --output text 2>/dev/null)
+            if [[ -n "$EKS_POLICIES" ]]; then
+                log_success "EKS 관련 정책이 설정되어 있습니다:"
+                echo "$EKS_POLICIES" | tr '\t' '\n' | while read -r policy; do
+                    echo "    - $policy"
+                done
+            else
+                log_warning "EKS 관련 정책이 설정되지 않았습니다."
+            fi
+        fi
+        
+        return 0
+    else
+        log_error "AWS 자격 증명이 설정되지 않았거나 유효하지 않습니다."
+        echo "해결 방법: aws configure 또는 환경 변수 설정"
+        return 1
+    fi
+}
+
 # 1. 클러스터 상태 확인
 check_cluster_status() {
     log_info "EKS 클러스터 상태 확인 중..."
@@ -246,7 +300,7 @@ check_nodegroup_status() {
             fi
             
             if [[ $HEALTH_ISSUES -gt 0 ]]; then
-                log_error "건강 상태 문제: $HEALTH_ISSUES"
+                log_error "헬스 체크 문제: $HEALTH_ISSUES"
                 echo "$NODEGROUP_INFO" | jq -r '.nodegroup.health.issues[] | "  - \(.code): \(.message)"'
             fi
         else
@@ -272,6 +326,13 @@ check_connectivity() {
 
 # 메인 진단 함수
 main_diagnosis() {
+    # 먼저 AWS STS 상태 확인
+    check_aws_sts
+    if [[ $? -ne 0 ]]; then
+        log_error "AWS STS 상태 확인 실패. 다른 진단을 건너뜁니다."
+        return 1
+    fi
+    
     case $DIAGNOSIS_LEVEL in
         "quick")
             check_cluster_status
