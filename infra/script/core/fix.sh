@@ -324,6 +324,33 @@ fix_routing() {
 fix_nat_gateways() {
     log_info "NAT Gateway 수정 중..."
     
+    # 새로운 NAT Gateway 수정 스크립트 사용
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    NAT_FIX_SCRIPT="$SCRIPT_DIR/../utils/fix_nat_gateway.sh"
+    
+    if [[ -f "$NAT_FIX_SCRIPT" ]]; then
+        log_info "상세한 NAT Gateway 수정 스크립트 실행 중..."
+        
+        # 사용자 확인 없이 자동 실행
+        echo "y" | "$NAT_FIX_SCRIPT"
+        
+        if [[ $? -eq 0 ]]; then
+            log_success "NAT Gateway 수정 스크립트가 성공적으로 완료되었습니다."
+        else
+            log_error "NAT Gateway 수정 스크립트 실행 중 오류가 발생했습니다."
+            log_warning "기본 NAT Gateway 수정을 시도합니다."
+            
+            # 기본 NAT Gateway 수정 (기존 로직)
+            fix_nat_gateways_basic
+        fi
+    else
+        log_warning "NAT Gateway 수정 스크립트를 찾을 수 없습니다. 기본 수정을 실행합니다."
+        fix_nat_gateways_basic
+    fi
+}
+
+# 기본 NAT Gateway 수정 함수 (기존 로직)
+fix_nat_gateways_basic() {
     CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
     VPC_ID=$(echo "$CLUSTER_INFO" | jq -r ".cluster.resourcesVpcConfig.vpcId")
     

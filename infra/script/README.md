@@ -15,6 +15,8 @@ infra/script/
 │   ├── check_aws_sts.sh    # AWS STS 상태 확인
 │   ├── check_network.sh    # 네트워크 확인
 │   ├── check_network_eks.sh # EKS 네트워크 확인
+│   ├── check_nat_gateway.sh # NAT Gateway 상태 확인
+│   ├── fix_nat_gateway.sh  # NAT Gateway 라우팅 수정
 │   ├── check_instance_logs.sh # 인스턴스 로그 확인
 │   ├── vpc_info.sh         # VPC 정보
 │   ├── add_iam_to_eks.sh   # IAM 역할 추가
@@ -147,6 +149,12 @@ infra/script/
 # EKS 네트워크 설정 확인
 ./utils/check_network_eks.sh sns-cluster
 
+# NAT Gateway 상태 확인
+./utils/check_nat_gateway.sh
+
+# NAT Gateway 라우팅 수정
+./utils/fix_nat_gateway.sh
+
 # VPC 정보 확인
 ./utils/vpc_info.sh
 ```
@@ -185,6 +193,7 @@ kubectl apply -f configs/aws-auth.yaml
 - ✅ EKS 애드온 상태 확인
 - ✅ IAM 역할 및 정책 확인
 - ✅ 서브넷 및 라우팅 확인
+- ✅ NAT Gateway 상태 및 라우팅 확인
 - ✅ VPC 엔드포인트 확인
 - ✅ 보안 그룹 규칙 확인
 - ✅ aws-auth ConfigMap 확인
@@ -193,6 +202,7 @@ kubectl apply -f configs/aws-auth.yaml
 ### 수정 기능
 - 🔧 aws-auth ConfigMap 자동 수정
 - 🔧 CNI 애드온 자동 설치/수정
+- 🔧 NAT Gateway 라우팅 자동 수정
 - 🔧 라우팅 테이블 자동 수정
 - 🔧 보안 그룹 규칙 자동 수정
 
