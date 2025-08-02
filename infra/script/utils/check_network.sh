@@ -1,20 +1,55 @@
 #!/bin/bash
 set -e
 
-# 서울 리전 고정
-REGION="ap-northeast-2"
+# 색상 정의
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# 로그 함수들
+log_info() {
+    echo -e "${BLUE}ℹ️  $1${NC}"
+}
+
+log_success() {
+    echo -e "${GREEN}✅ $1${NC}"
+}
+
+log_warning() {
+    echo -e "${YELLOW}⚠️  $1${NC}"
+}
+
+log_error() {
+    echo -e "${RED}❌ $1${NC}"
+}
 
 # 점검 대상 변수
 CLUSTER_NAME=$1
+REGION=${2:-"ap-northeast-2"}
 
 if [[ -z "$CLUSTER_NAME" ]]; then
-  echo "Usage: $0 <cluster-name>"
-  exit 1
+    echo "🔍 EKS 클러스터 네트워크 점검 도구"
+    echo "=================================="
+    echo ""
+    echo "사용법: $0 <클러스터-이름> [리전]"
+    echo ""
+    echo "예시:"
+    echo "  $0 sns-cluster"
+    echo "  $0 sns-cluster ap-northeast-2"
+    echo ""
+    echo "설명:"
+    echo "  - EKS 클러스터의 네트워크 구성을 점검합니다"
+    echo "  - VPC, 서브넷, 라우팅 테이블, VPC 엔드포인트를 확인합니다"
+    echo "  - 리전 기본값: ap-northeast-2"
+    exit 1
 fi
 
-echo "🔍 Checking EKS cluster [$CLUSTER_NAME] in region [$REGION]..."
+echo "🔍 리전 [$REGION]의 EKS 클러스터 [$CLUSTER_NAME] 점검 중..."
 
 # 1️⃣ EKS 클러스터 VPC와 서브넷 ID 확인
+log_info "EKS 클러스터 VPC와 서브넷 ID 확인 중..."
 VPC_ID=$(aws eks describe-cluster \
   --no-cli-pager \
   --name "$CLUSTER_NAME" \
@@ -29,12 +64,12 @@ SUBNET_IDS=$(aws eks describe-cluster \
   --query "cluster.resourcesVpcConfig.subnetIds[]" \
   --output text)
 
-echo "✅ VPC ID: $VPC_ID"
-echo "✅ Subnets: $SUBNET_IDS"
+log_success "VPC ID: $VPC_ID"
+log_success "서브넷: $SUBNET_IDS"
 
 # 2️⃣ 서브넷 퍼블릭 IP 자동할당 여부 확인
 echo ""
-echo "🔍 Checking subnet public IP auto-assign settings..."
+log_info "서브넷 퍼블릭 IP 자동할당 설정 확인 중..."
 for SUBNET_ID in $SUBNET_IDS; do
   AUTO_ASSIGN=$(aws ec2 describe-subnets \
     --no-cli-pager \
@@ -50,12 +85,12 @@ for SUBNET_ID in $SUBNET_IDS; do
     --query "Tags[?Key=='Name'].Value" \
     --output text)
 
-  echo "  - $SUBNET_NAME ($SUBNET_ID): Public IP Auto-Assign = $AUTO_ASSIGN"
+  echo "  - $SUBNET_NAME ($SUBNET_ID): 퍼블릭 IP 자동할당 = $AUTO_ASSIGN"
 done
 
 # 3️⃣ 라우팅 테이블 점검
 echo ""
-echo "🔍 Checking route tables for NAT/IGW configuration..."
+log_info "NAT/IGW 구성을 위한 라우팅 테이블 점검 중..."
 ROUTE_TABLE_IDS=$(aws ec2 describe-route-tables \
   --no-cli-pager \
   --filters "Name=vpc-id,Values=$VPC_ID" \
@@ -64,7 +99,7 @@ ROUTE_TABLE_IDS=$(aws ec2 describe-route-tables \
   --output text)
 
 for RTB_ID in $ROUTE_TABLE_IDS; do
-  echo "  ▶ Route Table: $RTB_ID"
+  echo "  ▶ 라우팅 테이블: $RTB_ID"
   aws ec2 describe-route-tables \
     --no-cli-pager \
     --route-table-ids "$RTB_ID" \
@@ -75,7 +110,7 @@ done
 
 # 4️⃣ VPC Endpoint 점검
 echo ""
-echo "🔍 Checking VPC Endpoints (S3/ECR recommended)..."
+log_info "VPC 엔드포인트 확인 중 (S3/ECR 권장)..."
 ENDPOINTS=$(aws ec2 describe-vpc-endpoints \
   --no-cli-pager \
   --filters "Name=vpc-id,Values=$VPC_ID" \
@@ -84,11 +119,11 @@ ENDPOINTS=$(aws ec2 describe-vpc-endpoints \
   --output text)
 
 if [[ -z "$ENDPOINTS" ]]; then
-  echo "  ⚠️ No VPC Endpoints found. (Consider adding S3/ECR endpoints for cost saving)"
+  log_warning "VPC 엔드포인트가 없습니다. (비용 절약을 위해 S3/ECR 엔드포인트 추가 고려)"
 else
-  echo "  ✅ VPC Endpoints found:"
+  log_success "VPC 엔드포인트 발견:"
   echo "$ENDPOINTS"
 fi
 
 echo ""
-echo "🎯 Check completed for EKS cluster: $CLUSTER_NAME"
+log_success "EKS 클러스터 $CLUSTER_NAME 점검 완료!"
