@@ -22,4 +22,4 @@ data:
     - userarn: arn:aws:iam::421114334882:user/CGLee
       username: cglee
       groups:
-        - system:masters
+        - system:masters 
