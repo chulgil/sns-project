@@ -176,9 +176,16 @@ check_iam_roles() {
 check_subnets() {
     log_info "서브넷 확인 중..."
     
-    SUBNET_IDS=("subnet-0d1bf6af96eba2b10" "subnet-0436c6d3f4296c972")
+    # 클러스터의 서브넷 ID 동적 조회
+    CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
+    SUBNET_IDS=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.subnetIds[]' 2>/dev/null)
     
-    for SUBNET_ID in "${SUBNET_IDS[@]}"; do
+    if [[ -z "$SUBNET_IDS" ]]; then
+        log_error "클러스터 서브넷 정보를 가져올 수 없음"
+        return 1
+    fi
+    
+    for SUBNET_ID in $SUBNET_IDS; do
         SUBNET_INFO=$(aws ec2 describe-subnets --subnet-ids $SUBNET_ID --region $REGION --query "Subnets[0]" --output json 2>/dev/null)
         
         if [[ $? -eq 0 ]]; then
@@ -198,13 +205,48 @@ check_subnets() {
             else
                 log_error "  라우팅 테이블을 찾을 수 없음"
             fi
+            
+            # 서브넷 태그 확인 (중요!)
+            ELB_TAG=$(aws ec2 describe-subnets --subnet-ids $SUBNET_ID --region $REGION --query "Subnets[0].Tags[?Key=='kubernetes.io/role/elb'].Value" --output text 2>/dev/null)
+            INTERNAL_ELB_TAG=$(aws ec2 describe-subnets --subnet-ids $SUBNET_ID --region $REGION --query "Subnets[0].Tags[?Key=='kubernetes.io/role/internal-elb'].Value" --output text 2>/dev/null)
+            
+            if [[ "$ELB_TAG" == "1" ]]; then
+                log_success "  퍼블릭 ELB 태그: kubernetes.io/role/elb=1"
+            else
+                log_error "  퍼블릭 ELB 태그 누락: kubernetes.io/role/elb=1"
+            fi
+            
+            if [[ "$INTERNAL_ELB_TAG" == "1" ]]; then
+                log_success "  내부 ELB 태그: kubernetes.io/role/internal-elb=1"
+            else
+                log_warning "  내부 ELB 태그 누락: kubernetes.io/role/internal-elb=1"
+            fi
         else
             log_error "서브넷 정보 조회 실패: $SUBNET_ID"
         fi
     done
 }
 
-# 5. VPC 엔드포인트 확인
+# 5. NAT Gateway 확인
+check_nat_gateways() {
+    log_info "NAT Gateway 확인 중..."
+    
+    CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
+    VPC_ID=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.vpcId')
+    
+    NAT_GATEWAYS=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" --region $REGION --query "NatGateways[]" --output json 2>/dev/null)
+    
+    if [[ "$NAT_GATEWAYS" != "[]" ]]; then
+        echo "$NAT_GATEWAYS" | jq -r '.[] | "  \(.NatGatewayId) (\(.State)) - \(.SubnetId)"' | while read nat; do
+            log_success "$nat"
+        done
+    else
+        log_error "사용 가능한 NAT Gateway를 찾을 수 없음"
+        log_warning "NAT Gateway가 없으면 프라이빗 서브넷의 노드들이 인터넷에 접근할 수 없습니다"
+    fi
+}
+
+# 6. VPC 엔드포인트 확인
 check_vpc_endpoints() {
     log_info "VPC 엔드포인트 확인 중..."
     
@@ -226,7 +268,7 @@ check_vpc_endpoints() {
     fi
 }
 
-# 6. 보안 그룹 확인
+# 7. 보안 그룹 확인
 check_security_groups() {
     log_info "보안 그룹 확인 중..."
     
@@ -252,12 +294,26 @@ check_security_groups() {
         else
             log_error "필수 포트 범위 누락: 1025-65535"
         fi
+        
+        # ICMP 프로토콜 문제 확인 (문서에서 지적한 문제)
+        if [[ "$INBOUND_RULES" == *'"IpProtocol": "-1"'* ]]; then
+            log_warning "ICMP 프로토콜(-1) 발견 - 포트 범위가 제한될 수 있음"
+            log_info "권장: 포트 범위 0-65535로 변경"
+        fi
+        
+        # 노드-클러스터 통신 확인
+        NODE_CLUSTER_COMM=$(echo "$INBOUND_RULES" | jq -r '.[] | select(.UserIdGroupPairs != null) | .UserIdGroupPairs[].GroupId' | head -1)
+        if [[ -n "$NODE_CLUSTER_COMM" ]]; then
+            log_success "노드-클러스터 통신 규칙 존재: $NODE_CLUSTER_COMM"
+        else
+            log_warning "노드-클러스터 통신 규칙이 명확하지 않음"
+        fi
     else
         log_error "클러스터 보안 그룹을 찾을 수 없음"
     fi
 }
 
-# 7. aws-auth ConfigMap 확인
+# 8. aws-auth ConfigMap 확인
 check_aws_auth() {
     log_info "aws-auth ConfigMap 확인 중..."
     
@@ -274,15 +330,27 @@ check_aws_auth() {
             else
                 log_error "aws-auth의 노드 역할 매핑 형식이 잘못됨"
             fi
+            
+            # 불필요한 역할 매핑 확인
+            if echo "$AUTH_CONFIG" | grep -A 10 "mapRoles:" | grep -q "AWSServiceRoleForAmazonEKSNodegroup"; then
+                log_warning "aws-auth에 불필요한 AWSServiceRoleForAmazonEKSNodegroup 매핑 존재"
+            fi
         else
             log_error "aws-auth mapRoles 섹션에 노드 역할 매핑 누락"
+        fi
+        
+        # mapUsers 섹션 확인
+        if echo "$AUTH_CONFIG" | grep -A 10 "mapUsers:" | grep -q "infra-admin"; then
+            log_success "aws-auth에 관리자 사용자 매핑 존재"
+        else
+            log_warning "aws-auth에 관리자 사용자 매핑 누락"
         fi
     else
         log_error "aws-auth ConfigMap을 찾을 수 없음"
     fi
 }
 
-# 8. 노드그룹 상태 확인 (노드그룹이 있는 경우)
+# 9. 노드그룹 상태 확인 (노드그룹이 있는 경우)
 check_nodegroup_status() {
     if [[ -n "$NODEGROUP_NAME" ]]; then
         log_info "노드그룹 상태 확인 중..."
@@ -309,7 +377,63 @@ check_nodegroup_status() {
     fi
 }
 
-# 9. 네트워크 연결성 테스트
+# 10. DHCP Options 확인
+check_dhcp_options() {
+    log_info "DHCP Options 확인 중..."
+    
+    CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
+    VPC_ID=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.vpcId')
+    
+    DHCP_OPTIONS_ID=$(aws ec2 describe-vpcs --vpc-ids $VPC_ID --query "Vpcs[0].DhcpOptionsId" --output text 2>/dev/null)
+    
+    if [[ -n "$DHCP_OPTIONS_ID" ]]; then
+        DHCP_CONFIG=$(aws ec2 describe-dhcp-options --dhcp-options-ids $DHCP_OPTIONS_ID --query "DhcpOptions[0].DhcpConfigurations" --output json 2>/dev/null)
+        
+        # 도메인 이름 확인
+        DOMAIN_NAME=$(echo "$DHCP_CONFIG" | jq -r '.[] | select(.Key == "domain-name") | .Values[0].Value')
+        if [[ "$DOMAIN_NAME" == *"compute.internal"* ]]; then
+            log_success "도메인 이름 설정 정상: $DOMAIN_NAME"
+        else
+            log_error "도메인 이름 설정 문제: $DOMAIN_NAME"
+        fi
+        
+        # DNS 서버 확인
+        DNS_SERVERS=$(echo "$DHCP_CONFIG" | jq -r '.[] | select(.Key == "domain-name-servers") | .Values[0].Value')
+        if [[ "$DNS_SERVERS" == "AmazonProvidedDNS" ]]; then
+            log_success "DNS 서버 설정 정상: $DNS_SERVERS"
+        else
+            log_error "DNS 서버 설정 문제: $DNS_SERVERS"
+        fi
+    else
+        log_error "DHCP Options를 찾을 수 없음"
+    fi
+}
+
+# 11. DNS Resolution 확인
+check_dns_resolution() {
+    log_info "DNS Resolution 확인 중..."
+    
+    CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
+    VPC_ID=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.vpcId')
+    
+    # DNS 호스트명 확인
+    DNS_HOSTNAMES=$(aws ec2 describe-vpc-attribute --vpc-id $VPC_ID --attribute enableDnsHostnames --query "EnableDnsHostnames.Value" --output text 2>/dev/null)
+    if [[ "$DNS_HOSTNAMES" == "True" ]]; then
+        log_success "DNS 호스트명 활성화됨"
+    else
+        log_error "DNS 호스트명 비활성화됨"
+    fi
+    
+    # DNS 해석 확인
+    DNS_SUPPORT=$(aws ec2 describe-vpc-attribute --vpc-id $VPC_ID --attribute enableDnsSupport --query "EnableDnsSupport.Value" --output text 2>/dev/null)
+    if [[ "$DNS_SUPPORT" == "True" ]]; then
+        log_success "DNS 해석 활성화됨"
+    else
+        log_error "DNS 해석 비활성화됨"
+    fi
+}
+
+# 12. 네트워크 연결성 테스트
 check_connectivity() {
     log_info "네트워크 연결성 확인 중..."
     
@@ -344,6 +468,7 @@ main_diagnosis() {
             check_eks_addons
             check_iam_roles
             check_subnets
+            check_nat_gateways
             check_vpc_endpoints
             check_security_groups
             ;;
@@ -352,8 +477,11 @@ main_diagnosis() {
             check_eks_addons
             check_iam_roles
             check_subnets
+            check_nat_gateways
             check_vpc_endpoints
             check_security_groups
+            check_dhcp_options
+            check_dns_resolution
             check_aws_auth
             check_nodegroup_status
             check_connectivity

@@ -1,21 +1,21 @@
 #!/bin/bash
 
 CLUSTER_NAME=$1
-FIX_TYPE=${2:-"all"}  # all, aws-auth, cni, routing, security
+FIX_TYPE=${2:-"all"}  # all, aws-auth, cni, routing, security, ports
 
 REGION="ap-northeast-2"
 
 if [[ -z "$CLUSTER_NAME" ]]; then
-  echo "Usage: $0 <cluster-name> [fix-type]"
-  echo "Fix types: all, aws-auth, cni, routing, security (default: all)"
+  echo "사용법: $0 <클러스터-이름> [수정-유형]"
+  echo "수정 유형: all, aws-auth, cni, routing, security, ports (기본값: all)"
   exit 1
 fi
 
-echo "🔧 EKS Node Group Fix Tool"
+echo "🔧 EKS 노드그룹 수정 도구"
 echo "=========================="
-echo "Cluster: $CLUSTER_NAME"
-echo "Fix Type: $FIX_TYPE"
-echo "Region: $REGION"
+echo "클러스터: $CLUSTER_NAME"
+echo "수정 유형: $FIX_TYPE"
+echo "리전: $REGION"
 echo ""
 
 # 색상 정의
@@ -44,7 +44,7 @@ log_error() {
 
 # AWS STS 상태 확인
 check_aws_sts() {
-    log_info "Checking AWS STS status..."
+    log_info "AWS STS 상태 확인 중..."
     
     CALLER_IDENTITY=$(aws sts get-caller-identity 2>/dev/null)
     if [[ $? -ne 0 ]]; then
@@ -67,7 +67,7 @@ check_aws_sts() {
 
 # 1. aws-auth ConfigMap 수정
 fix_aws_auth() {
-    log_info "Fixing aws-auth ConfigMap..."
+    log_info "aws-auth ConfigMap 수정 중..."
     
     # AWS Account ID 자동 조회
     ACCOUNT_ID=$(aws sts get-caller-identity --query "Account" --output text --region "$REGION")
@@ -77,28 +77,28 @@ fix_aws_auth() {
     fi
     
     # kubectl 컨텍스트 업데이트 (역할 문제 해결)
-    log_info "Updating kubectl context..."
+    log_info "kubectl 컨텍스트 업데이트 중..."
     aws eks update-kubeconfig --name $CLUSTER_NAME --region $REGION
     
     if [[ $? -eq 0 ]]; then
-        log_success "kubectl context updated successfully"
+        log_success "kubectl 컨텍스트가 성공적으로 업데이트되었습니다"
     else
-        log_warning "Could not update kubectl context"
+        log_warning "kubectl 컨텍스트를 업데이트할 수 없습니다"
     fi
     
     # 백업 생성 (ConfigMap이 존재하는 경우에만)
-    log_info "Creating backup of existing aws-auth ConfigMap..."
+    log_info "기존 aws-auth ConfigMap 백업 생성 중..."
     if kubectl get configmap aws-auth -n kube-system >/dev/null 2>&1; then
         BACKUP_FILE="aws-auth-backup-$(date +%Y%m%d-%H%M%S).yaml"
         kubectl get configmap aws-auth -n kube-system -o yaml > "$BACKUP_FILE" 2>/dev/null
         
         if [[ $? -eq 0 ]]; then
-            log_success "Backup created: $BACKUP_FILE"
+            log_success "백업 생성됨: $BACKUP_FILE"
         else
-            log_warning "Could not create backup"
+            log_warning "백업을 생성할 수 없습니다"
         fi
     else
-        log_info "No existing aws-auth ConfigMap found, skipping backup"
+        log_info "기존 aws-auth ConfigMap이 없어 백업을 건너뜁니다"
     fi
     
     # 현재 사용자 정보 가져오기
@@ -135,10 +135,10 @@ EOF
     kubectl apply -f aws-auth-fixed.yaml
     
     if [[ $? -eq 0 ]]; then
-        log_success "aws-auth ConfigMap fixed successfully"
-        log_info "Added current user ($CURRENT_USER_NAME) with system:masters permissions"
+        log_success "aws-auth ConfigMap이 성공적으로 수정되었습니다"
+        log_info "현재 사용자 ($CURRENT_USER_NAME)에 system:masters 권한 추가됨"
     else
-        log_error "Failed to fix aws-auth ConfigMap"
+        log_error "aws-auth ConfigMap 수정에 실패했습니다"
         return 1
     fi
     
@@ -148,18 +148,18 @@ EOF
 
 # 2. CNI 애드온 수정
 fix_cni() {
-    log_info "Fixing CNI addon..."
+    log_info "CNI 애드온 수정 중..."
     
     # CNI 애드온 상태 확인
     CNI_STATUS=$(aws eks describe-addon --cluster-name $CLUSTER_NAME --addon-name vpc-cni --region $REGION --query "addon.status" --output text 2>/dev/null)
     
     if [[ "$CNI_STATUS" == "ACTIVE" ]]; then
-        log_success "CNI addon is already active"
+        log_success "CNI 애드온이 이미 활성화되어 있습니다"
         return 0
     fi
     
     # CNI 애드온 설치/업데이트
-    log_info "Installing/updating CNI addon..."
+    log_info "CNI 애드온 설치/업데이트 중..."
     
     aws eks create-addon \
         --cluster-name $CLUSTER_NAME \
@@ -168,27 +168,27 @@ fix_cni() {
         --resolve-conflicts OVERWRITE 2>/dev/null
     
     if [[ $? -eq 0 ]]; then
-        log_success "CNI addon installation initiated"
+        log_success "CNI 애드온 설치가 시작되었습니다"
         
         # 상태 확인
-        log_info "Waiting for CNI addon to be active..."
+        log_info "CNI 애드온이 활성화될 때까지 대기 중..."
         aws eks wait addon-active --cluster-name $CLUSTER_NAME --addon-name vpc-cni --region $REGION
         
         if [[ $? -eq 0 ]]; then
-            log_success "CNI addon is now active"
+            log_success "CNI 애드온이 이제 활성화되었습니다"
         else
-            log_error "CNI addon failed to become active"
+            log_error "CNI 애드온이 활성화되지 못했습니다"
             return 1
         fi
     else
-        log_error "Failed to install CNI addon"
+        log_error "CNI 애드온 설치에 실패했습니다"
         return 1
     fi
 }
 
 # 3. 라우팅 테이블 수정
 fix_routing() {
-    log_info "Fixing routing tables..."
+    log_info "라우팅 테이블 수정 중..."
     
     CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
     VPC_ID=$(echo "$CLUSTER_INFO" | jq -r ".cluster.resourcesVpcConfig.vpcId")
@@ -211,7 +211,7 @@ fix_routing() {
         SUBNET_ID=${SUBNET_IDS[$i]}
         ROUTE_TABLE=${ROUTE_TABLES[$i]}
         
-        log_info "Checking subnet: $SUBNET_ID"
+        log_info "서브넷 확인 중: $SUBNET_ID"
         
         # 현재 라우트 확인
         CURRENT_ROUTES=$(aws ec2 describe-route-tables \
@@ -228,15 +228,15 @@ fix_routing() {
             --output text)
         
         if [[ "$NAT_GATEWAYS" != "None" && -n "$NAT_GATEWAYS" ]]; then
-            log_success "Found NAT Gateway: $NAT_GATEWAYS"
+            log_success "NAT Gateway 발견: $NAT_GATEWAYS"
             
             # 0.0.0.0/0 라우트가 NAT Gateway로 설정되어 있는지 확인
             NAT_ROUTE=$(echo "$CURRENT_ROUTES" | jq -r '.[] | select(.DestinationCidrBlock == "0.0.0.0/0" and .NatGatewayId != null) | .NatGatewayId')
             
             if [[ -n "$NAT_ROUTE" ]]; then
-                log_success "NAT Gateway route already exists: $NAT_ROUTE"
+                log_success "NAT Gateway 라우트가 이미 존재합니다: $NAT_ROUTE"
             else
-                log_info "Adding NAT Gateway route..."
+                log_info "NAT Gateway 라우트 추가 중..."
                 
                 # 기존 0.0.0.0/0 라우트 삭제
                 aws ec2 delete-route \
@@ -252,26 +252,26 @@ fix_routing() {
                     --region $REGION
                 
                 if [[ $? -eq 0 ]]; then
-                    log_success "NAT Gateway route added successfully"
+                    log_success "NAT Gateway 라우트가 성공적으로 추가되었습니다"
                 else
-                    log_error "Failed to add NAT Gateway route"
+                    log_error "NAT Gateway 라우트 추가에 실패했습니다"
                 fi
             fi
         else
-            log_error "No available NAT Gateway found"
+            log_error "사용 가능한 NAT Gateway를 찾을 수 없습니다"
         fi
     done
 }
 
 # 4. 보안 그룹 수정
 fix_security_groups() {
-    log_info "Fixing security group rules..."
+    log_info "보안 그룹 규칙 수정 중..."
     
     CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
     CLUSTER_SG=$(echo "$CLUSTER_INFO" | jq -r ".cluster.resourcesVpcConfig.clusterSecurityGroupId")
     
     if [[ "$CLUSTER_SG" != "null" && -n "$CLUSTER_SG" ]]; then
-        log_info "Cluster Security Group: $CLUSTER_SG"
+        log_info "클러스터 보안 그룹: $CLUSTER_SG"
         
         # 현재 인바운드 규칙 확인
         CURRENT_INBOUND=$(aws ec2 describe-security-groups \
@@ -280,11 +280,82 @@ fix_security_groups() {
             --query "SecurityGroups[0].IpPermissions" \
             --output json)
         
+        # ICMP 프로토콜(-1) 문제 해결 (AWS re:Post 문서 기반)
+        ICMP_RULE_EXISTS=$(echo "$CURRENT_INBOUND" | jq -r '.[] | select(.IpProtocol == "-1") | .IpProtocol')
+        
+        if [[ -n "$ICMP_RULE_EXISTS" ]]; then
+            log_warning "ICMP 프로토콜(-1) 규칙 발견 - 포트 범위 제한 문제 해결 중..."
+            
+            # 포트 범위 0-65535 추가 (ICMP 대신)
+            log_info "포트 범위 0-65535 추가 중 (ICMP 대체)..."
+            
+            aws ec2 authorize-security-group-ingress \
+                --group-id $CLUSTER_SG \
+                --protocol tcp \
+                --port 0-65535 \
+                --cidr 0.0.0.0/0 \
+                --region $REGION 2>/dev/null
+            
+            if [[ $? -eq 0 ]]; then
+                log_success "포트 범위 0-65535 추가됨 (ICMP 대체)"
+            else
+                log_warning "포트 범위 0-65535 추가 실패 (이미 존재할 수 있음)"
+            fi
+            
+            # UDP 포트 범위도 추가
+            aws ec2 authorize-security-group-ingress \
+                --group-id $CLUSTER_SG \
+                --protocol udp \
+                --port 0-65535 \
+                --cidr 0.0.0.0/0 \
+                --region $REGION 2>/dev/null
+            
+            if [[ $? -eq 0 ]]; then
+                log_success "UDP 포트 범위 0-65535 추가됨"
+            else
+                log_warning "UDP 포트 범위 0-65535 추가 실패 (이미 존재할 수 있음)"
+            fi
+            
+            # ICMP 규칙 삭제 (신중하게 처리)
+            log_info "ICMP 프로토콜(-1) 규칙 삭제 중..."
+            
+            # ICMP 인바운드 규칙들 삭제 (CIDR 기반)
+            log_info "ICMP 프로토콜(-1) CIDR 규칙 삭제 중..."
+            aws ec2 revoke-security-group-ingress \
+                --group-id $CLUSTER_SG \
+                --protocol -1 \
+                --port -1 \
+                --cidr 0.0.0.0/0 \
+                --region $REGION 2>/dev/null
+            
+            if [[ $? -eq 0 ]]; then
+                log_success "ICMP 프로토콜(-1) CIDR 규칙 삭제됨"
+            else
+                log_warning "ICMP CIDR 규칙 삭제 실패 (이미 삭제되었을 수 있음)"
+            fi
+            
+            # ICMP 인바운드 규칙들 삭제 (Security Group 기반)
+            log_info "ICMP 프로토콜(-1) Security Group 규칙 삭제 중..."
+            aws ec2 revoke-security-group-ingress \
+                --group-id $CLUSTER_SG \
+                --protocol -1 \
+                --source-group $CLUSTER_SG \
+                --region $REGION 2>/dev/null
+            
+            if [[ $? -eq 0 ]]; then
+                log_success "ICMP 프로토콜(-1) Security Group 규칙 삭제됨"
+            else
+                log_warning "ICMP Security Group 규칙 삭제 실패 (이미 삭제되었을 수 있음)"
+            fi
+        else
+            log_success "ICMP 프로토콜(-1) 규칙 없음 - 정상"
+        fi
+        
         # 1025-65535 포트 범위가 있는지 확인
         PORT_RANGE_EXISTS=$(echo "$CURRENT_INBOUND" | jq -r '.[] | select(.FromPort == 1025 and .ToPort == 65535) | .FromPort')
         
         if [[ -z "$PORT_RANGE_EXISTS" ]]; then
-            log_info "Adding missing port range 1025-65535..."
+            log_info "누락된 포트 범위 1025-65535 추가 중..."
             
             aws ec2 authorize-security-group-ingress \
                 --group-id $CLUSTER_SG \
@@ -294,19 +365,19 @@ fix_security_groups() {
                 --region $REGION
             
             if [[ $? -eq 0 ]]; then
-                log_success "Port range 1025-65535 added successfully"
+                log_success "포트 범위 1025-65535가 성공적으로 추가되었습니다"
             else
-                log_error "Failed to add port range 1025-65535"
+                log_error "포트 범위 1025-65535 추가에 실패했습니다"
             fi
         else
-            log_success "Port range 1025-65535 already exists"
+            log_success "포트 범위 1025-65535가 이미 존재합니다"
         fi
         
         # 443 포트 확인
         PORT_443_EXISTS=$(echo "$CURRENT_INBOUND" | jq -r '.[] | select(.FromPort == 443 and .ToPort == 443) | .FromPort')
         
         if [[ -z "$PORT_443_EXISTS" ]]; then
-            log_info "Adding missing port 443..."
+            log_info "누락된 포트 443 추가 중..."
             
             aws ec2 authorize-security-group-ingress \
                 --group-id $CLUSTER_SG \
@@ -316,15 +387,25 @@ fix_security_groups() {
                 --region $REGION
             
             if [[ $? -eq 0 ]]; then
-                log_success "Port 443 added successfully"
+                log_success "포트 443이 성공적으로 추가되었습니다"
             else
-                log_error "Failed to add port 443"
+                log_error "포트 443 추가에 실패했습니다"
             fi
         else
-            log_success "Port 443 already exists"
+            log_success "포트 443이 이미 존재합니다"
+        fi
+        
+        # 노드-클러스터 통신 규칙 확인 및 추가
+        NODE_CLUSTER_RULE=$(echo "$CURRENT_INBOUND" | jq -r '.[] | select(.UserIdGroupPairs != null) | .UserIdGroupPairs[].GroupId' | head -1)
+        
+        if [[ -z "$NODE_CLUSTER_RULE" ]]; then
+            log_warning "노드-클러스터 통신 규칙이 명확하지 않음"
+            log_info "노드 보안 그룹에서 클러스터로의 통신 규칙 확인 필요"
+        else
+            log_success "노드-클러스터 통신 규칙 존재: $NODE_CLUSTER_RULE"
         fi
     else
-        log_error "No cluster security group found"
+        log_error "클러스터 보안 그룹을 찾을 수 없습니다"
     fi
 }
 
@@ -350,6 +431,9 @@ main_fix() {
         "security")
             fix_security_groups
             ;;
+        "ports")
+            fix_security_groups
+            ;;
         "all")
             fix_aws_auth
             fix_cni
@@ -357,7 +441,7 @@ main_fix() {
             fix_security_groups
             ;;
         *)
-            log_error "Invalid fix type: $FIX_TYPE"
+            log_error "잘못된 수정 유형: $FIX_TYPE"
             exit 1
             ;;
     esac
@@ -367,9 +451,9 @@ main_fix() {
 main_fix
 
 echo ""
-log_info "Fix completed!"
+log_info "수정 완료!"
 echo ""
-echo "💡 Next steps:"
-echo "1. Run diagnosis: ./core/diagnose.sh $CLUSTER_NAME"
-echo "2. If all checks pass, create node group: ./core/create.sh $CLUSTER_NAME <nodegroup-name>"
-echo "3. Monitor progress: ./core/monitor.sh $CLUSTER_NAME <nodegroup-name>" 
+echo "💡 다음 단계:"
+echo "1. 진단 실행: ./core/diagnose.sh $CLUSTER_NAME"
+echo "2. 모든 검사가 통과하면 노드그룹 생성: ./core/create.sh $CLUSTER_NAME <노드그룹-이름>"
+echo "3. 진행 상황 모니터링: ./core/monitor.sh $CLUSTER_NAME <노드그룹-이름>" 
