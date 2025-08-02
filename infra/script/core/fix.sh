@@ -7,7 +7,7 @@ REGION="ap-northeast-2"
 
 if [[ -z "$CLUSTER_NAME" ]]; then
   echo "사용법: $0 <클러스터-이름> [수정-유형]"
-  echo "수정 유형: all, aws-auth, cni, iam, routing, security, ports, internet (기본값: all)"
+  echo "수정 유형: all, aws-auth, cni, iam, routing, nat, security, ports, internet (기본값: all)"
   exit 1
 fi
 
@@ -320,7 +320,99 @@ fix_routing() {
     done
 }
 
-# 5. 보안 그룹 수정
+# 5. NAT Gateway 수정
+fix_nat_gateways() {
+    log_info "NAT Gateway 수정 중..."
+    
+    CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
+    VPC_ID=$(echo "$CLUSTER_INFO" | jq -r ".cluster.resourcesVpcConfig.vpcId")
+    
+    # NAT Gateway 확인
+    NAT_GATEWAYS=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" --region $REGION --query "NatGateways[]" --output json 2>/dev/null)
+    
+    if [[ "$NAT_GATEWAYS" != "[]" ]]; then
+        echo "$NAT_GATEWAYS" | jq -r '.[] | "\(.NatGatewayId)|\(.SubnetId)"' | while IFS='|' read -r nat_id subnet_id; do
+            log_info "NAT Gateway 확인 중: $nat_id (서브넷: $subnet_id)"
+            
+            # NAT Gateway 서브넷의 라우팅 테이블 확인
+            ROUTE_TABLE=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$subnet_id" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null)
+            
+            if [[ "$ROUTE_TABLE" != "None" && -n "$ROUTE_TABLE" ]]; then
+                # NAT Gateway 서브넷이 Internet Gateway로 라우팅되는지 확인
+                IGW_ROUTE=$(aws ec2 describe-route-tables --route-table-ids $ROUTE_TABLE --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].GatewayId" --output text 2>/dev/null)
+                
+                if [[ "$IGW_ROUTE" == *"igw-"* ]]; then
+                    log_success "NAT Gateway 서브넷 라우팅 정상: Internet Gateway로 라우팅됨"
+                else
+                    log_warning "NAT Gateway 서브넷 라우팅 문제 수정 중..."
+                    
+                    # Internet Gateway ID 가져오기
+                    IGW_ID=$(aws ec2 describe-internet-gateways --filters "Name=attachment.vpc-id,Values=$VPC_ID" --query "InternetGateways[0].InternetGatewayId" --output text 2>/dev/null)
+                    
+                    if [[ "$IGW_ID" != "None" && -n "$IGW_ID" ]]; then
+                        # 기존 0.0.0.0/0 라우트 삭제
+                        aws ec2 delete-route --route-table-id $ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --region $REGION 2>/dev/null
+                        
+                        # Internet Gateway로 새 라우트 추가
+                        aws ec2 create-route --route-table-id $ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --gateway-id $IGW_ID --region $REGION
+                        
+                        if [[ $? -eq 0 ]]; then
+                            log_success "NAT Gateway 서브넷 라우팅 수정 완료: Internet Gateway로 라우팅됨"
+                        else
+                            log_error "NAT Gateway 서브넷 라우팅 수정 실패"
+                        fi
+                    else
+                        log_error "Internet Gateway를 찾을 수 없습니다"
+                    fi
+                fi
+            else
+                log_error "NAT Gateway 서브넷 라우팅 테이블을 찾을 수 없음"
+            fi
+        done
+        
+        # 노드그룹 서브넷들이 NAT Gateway로 라우팅되는지 확인 및 수정
+        log_info "노드그룹 서브넷 NAT Gateway 라우팅 확인 중..."
+        SUBNET_IDS=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.subnetIds[]' 2>/dev/null)
+        
+        for SUBNET_ID in $SUBNET_IDS; do
+            ROUTE_TABLE=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$SUBNET_ID" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null)
+            
+            if [[ "$ROUTE_TABLE" != "None" && -n "$ROUTE_TABLE" ]]; then
+                NAT_ROUTE=$(aws ec2 describe-route-tables --route-table-ids $ROUTE_TABLE --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].NatGatewayId" --output text 2>/dev/null)
+                
+                if [[ "$NAT_ROUTE" == *"nat-"* ]]; then
+                    log_success "노드그룹 서브넷 $SUBNET_ID: NAT Gateway로 라우팅됨 ($NAT_ROUTE)"
+                else
+                    log_warning "노드그룹 서브넷 $SUBNET_ID: NAT Gateway로 라우팅되지 않음 - 수정 중..."
+                    
+                    # 사용 가능한 NAT Gateway 가져오기
+                    AVAILABLE_NAT=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" --query "NatGateways[0].NatGatewayId" --output text 2>/dev/null)
+                    
+                    if [[ "$AVAILABLE_NAT" != "None" && -n "$AVAILABLE_NAT" ]]; then
+                        # 기존 0.0.0.0/0 라우트 삭제
+                        aws ec2 delete-route --route-table-id $ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --region $REGION 2>/dev/null
+                        
+                        # NAT Gateway로 새 라우트 추가
+                        aws ec2 create-route --route-table-id $ROUTE_TABLE --destination-cidr-block 0.0.0.0/0 --nat-gateway-id $AVAILABLE_NAT --region $REGION
+                        
+                        if [[ $? -eq 0 ]]; then
+                            log_success "노드그룹 서브넷 $SUBNET_ID: NAT Gateway 라우팅 수정 완료 ($AVAILABLE_NAT)"
+                        else
+                            log_error "노드그룹 서브넷 $SUBNET_ID: NAT Gateway 라우팅 수정 실패"
+                        fi
+                    else
+                        log_error "사용 가능한 NAT Gateway를 찾을 수 없습니다"
+                    fi
+                fi
+            fi
+        done
+    else
+        log_error "사용 가능한 NAT Gateway를 찾을 수 없습니다"
+        log_warning "NAT Gateway가 없으면 프라이빗 서브넷의 노드들이 인터넷에 접근할 수 없습니다"
+    fi
+}
+
+# 6. 보안 그룹 수정
 fix_security_groups() {
     log_info "보안 그룹 규칙 수정 중..."
     
@@ -466,7 +558,7 @@ fix_security_groups() {
     fi
 }
 
-# 6. 컨테이너 인터넷 접근 수정
+# 7. 컨테이너 인터넷 접근 수정
 fix_container_internet_access() {
     log_info "컨테이너 인터넷 접근 수정 중..."
     
@@ -575,6 +667,9 @@ main_fix() {
         "routing")
             fix_routing
             ;;
+        "nat")
+            fix_nat_gateways
+            ;;
         "security")
             fix_security_groups
             ;;
@@ -589,6 +684,7 @@ main_fix() {
             fix_cni
             fix_iam_policies
             fix_routing
+            fix_nat_gateways
             fix_security_groups
             fix_container_internet_access
             ;;

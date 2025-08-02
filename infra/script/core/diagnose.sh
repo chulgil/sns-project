@@ -237,8 +237,42 @@ check_nat_gateways() {
     NAT_GATEWAYS=$(aws ec2 describe-nat-gateways --filter "Name=vpc-id,Values=$VPC_ID" "Name=state,Values=available" --region $REGION --query "NatGateways[]" --output json 2>/dev/null)
     
     if [[ "$NAT_GATEWAYS" != "[]" ]]; then
-        echo "$NAT_GATEWAYS" | jq -r '.[] | "  \(.NatGatewayId) (\(.State)) - \(.SubnetId)"' | while read nat; do
-            log_success "$nat"
+        echo "$NAT_GATEWAYS" | jq -r '.[] | "\(.NatGatewayId)|\(.State)|\(.SubnetId)"' | while IFS='|' read -r nat_id state subnet_id; do
+            log_success "$nat_id ($state) - $subnet_id"
+            
+            # NAT Gateway 서브넷의 라우팅 테이블 확인
+            ROUTE_TABLE=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$subnet_id" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null)
+            
+            if [[ "$ROUTE_TABLE" != "None" && -n "$ROUTE_TABLE" ]]; then
+                # NAT Gateway 서브넷이 Internet Gateway로 라우팅되는지 확인
+                IGW_ROUTE=$(aws ec2 describe-route-tables --route-table-ids $ROUTE_TABLE --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].GatewayId" --output text 2>/dev/null)
+                
+                if [[ "$IGW_ROUTE" == *"igw-"* ]]; then
+                    log_success "  NAT Gateway 서브넷 라우팅 정상: Internet Gateway로 라우팅됨"
+                else
+                    log_error "  NAT Gateway 서브넷 라우팅 문제: Internet Gateway로 라우팅되지 않음"
+                fi
+            else
+                log_error "  NAT Gateway 서브넷 라우팅 테이블을 찾을 수 없음"
+            fi
+        done
+        
+        # 노드그룹 서브넷들이 NAT Gateway로 라우팅되는지 확인
+        log_info "노드그룹 서브넷 NAT Gateway 라우팅 확인 중..."
+        SUBNET_IDS=$(echo "$CLUSTER_INFO" | jq -r '.cluster.resourcesVpcConfig.subnetIds[]' 2>/dev/null)
+        
+        for SUBNET_ID in $SUBNET_IDS; do
+            ROUTE_TABLE=$(aws ec2 describe-route-tables --filters "Name=association.subnet-id,Values=$SUBNET_ID" --query "RouteTables[0].RouteTableId" --output text 2>/dev/null)
+            
+            if [[ "$ROUTE_TABLE" != "None" && -n "$ROUTE_TABLE" ]]; then
+                NAT_ROUTE=$(aws ec2 describe-route-tables --route-table-ids $ROUTE_TABLE --query "RouteTables[0].Routes[?DestinationCidrBlock=='0.0.0.0/0'].NatGatewayId" --output text 2>/dev/null)
+                
+                if [[ "$NAT_ROUTE" == *"nat-"* ]]; then
+                    log_success "  노드그룹 서브넷 $SUBNET_ID: NAT Gateway로 라우팅됨 ($NAT_ROUTE)"
+                else
+                    log_error "  노드그룹 서브넷 $SUBNET_ID: NAT Gateway로 라우팅되지 않음"
+                fi
+            fi
         done
     else
         log_error "사용 가능한 NAT Gateway를 찾을 수 없음"
