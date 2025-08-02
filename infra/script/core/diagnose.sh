@@ -185,15 +185,19 @@ check_security_groups() {
         # 인바운드 규칙 확인
         INBOUND_RULES=$(aws ec2 describe-security-groups --group-ids $CLUSTER_SG --region $REGION --query "SecurityGroups[0].IpPermissions" --output json 2>/dev/null)
         
-        # 필수 포트 확인
-        REQUIRED_PORTS=("443" "1025-65535")
-        for PORT_RANGE in "${REQUIRED_PORTS[@]}"; do
-            if [[ "$INBOUND_RULES" == *"$PORT_RANGE"* ]]; then
-                log_success "Required port range found: $PORT_RANGE"
-            else
-                log_error "Required port range missing: $PORT_RANGE"
-            fi
-        done
+        # 포트 443 확인
+        if [[ "$INBOUND_RULES" == *'"FromPort": 443'* ]] || [[ "$INBOUND_RULES" == *'"ToPort": 443'* ]]; then
+            log_success "Required port range found: 443"
+        else
+            log_error "Required port range missing: 443"
+        fi
+        
+        # 포트 범위 1025-65535 확인 (FromPort: 1025, ToPort: 65535)
+        if [[ "$INBOUND_RULES" == *'"FromPort": 1025'* ]] && [[ "$INBOUND_RULES" == *'"ToPort": 65535'* ]]; then
+            log_success "Required port range found: 1025-65535"
+        else
+            log_error "Required port range missing: 1025-65535"
+        fi
     else
         log_error "No cluster security group found"
     fi
