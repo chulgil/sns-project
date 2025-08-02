@@ -193,9 +193,19 @@ fix_routing() {
     CLUSTER_INFO=$(aws eks describe-cluster --name $CLUSTER_NAME --region $REGION)
     VPC_ID=$(echo "$CLUSTER_INFO" | jq -r ".cluster.resourcesVpcConfig.vpcId")
     
-    # 서브넷 정보
-    SUBNET_IDS=("subnet-0d1bf6af96eba2b10" "subnet-0436c6d3f4296c972")
-    ROUTE_TABLES=("rtb-0831774c9ca1ff9f1" "rtb-0cc581b9fb3f9493a")
+    # 서브넷 정보 (동적으로 조회)
+    SUBNET_IDS=$(aws ec2 describe-subnets \
+        --filters "Name=vpc-id,Values=$VPC_ID" "Name=tag:kubernetes.io/role/elb,Values=1" \
+        --region $REGION \
+        --query "Subnets[].SubnetId" \
+        --output text)
+    
+    # 라우팅 테이블 정보 (동적으로 조회)
+    ROUTE_TABLES=$(aws ec2 describe-route-tables \
+        --filters "Name=vpc-id,Values=$VPC_ID" \
+        --region $REGION \
+        --query "RouteTables[].RouteTableId" \
+        --output text)
     
     for i in "${!SUBNET_IDS[@]}"; do
         SUBNET_ID=${SUBNET_IDS[$i]}

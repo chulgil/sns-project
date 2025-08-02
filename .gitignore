@@ -76,6 +76,30 @@ application-dev.yaml
 
 # Kubernetes secrets
 *-secret.yaml
+*-secret.yml
+
+# AWS configuration files
+aws-auth.yaml
+aws-auth-backup-*.yaml
+
+# Environment files
+.env
+.env.local
+.env.production
+.env.staging
+
+# AWS credentials
+.aws/
+credentials
+config
+
+# Terraform state files
+*.tfstate
+*.tfstate.*
+.terraform/
+
+# Ansible vault files
+*.vault
 
 # Logs
 logs/

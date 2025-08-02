@@ -5,21 +5,18 @@ metadata:
   namespace: kube-system
 data:
   mapRoles: |
-    - rolearn: arn:aws:iam::421114334882:role/EKS-NodeGroup-Role
+    - rolearn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/EKS-NodeGroup-Role
       username: system:node:{{EC2PrivateDNSName}}
       groups:
         - system:bootstrappers
         - system:nodes
-    - rolearn: arn:aws:iam::421114334882:role/EKSAdminRole
-      username: eks-admin-role
+    - rolearn: arn:aws:iam::${AWS_ACCOUNT_ID}:role/AWSServiceRoleForAmazonEKSNodegroup
+      username: system:node:{{EC2PrivateDNSName}}
       groups:
-        - system:masters
+        - system:bootstrappers
+        - system:nodes
   mapUsers: |
-    - userarn: arn:aws:iam::421114334882:user/infra-admin
-      username: infra-admin
-      groups:
-        - system:masters
-    - userarn: arn:aws:iam::421114334882:user/CGLee
-      username: cglee
+    - userarn: arn:aws:iam::${AWS_ACCOUNT_ID}:user/${CURRENT_USER}
+      username: ${CURRENT_USER}
       groups:
         - system:masters 
