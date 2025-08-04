@@ -18,12 +18,21 @@ spec:
       labels:
         app: image-server
     spec:
+      volumes:
+        - name: image-volume
+          persistentVolumeClaim:
+            claimName: image-volume-claim
       containers:
         - name: image
-          image: 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/image-server:0.0.1
+          image: 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/image-server:0.0.2
+          volumeMounts:
+            - name: image-volume
+              mountPath: /images
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: dev
+            - name: IMAGE_PATH
+              value: images
           resources:
             requests:
               memory: "512Mi"
