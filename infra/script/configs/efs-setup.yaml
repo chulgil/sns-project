@@ -69,7 +69,7 @@ metadata:
 provisioner: efs.csi.aws.com
 parameters:
   provisioningMode: efs-ap
-  fileSystemId: fs-xxxxxxxxx  # 실제 EFS ID로 변경 필요
+  fileSystemId: fs-0c8ce5c0e0d2b9601  # 실제 EFS ID로 변경 필요
   directoryPerms: "700"
   gidRangeStart: "1000"
   gidRangeEnd: "2000"
