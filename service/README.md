@@ -16,28 +16,38 @@
 ## 1. 아키텍처 개요
 
 ### 1.1 전체 아키텍처
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                        SNS Platform                            │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────┐ │
-│  │ Feed Server │  │User Server  │  │Image Server │  │Timeline │ │
-│  │             │  │             │  │             │  │ Server  │ │
-│  │ • 피드 CRUD │  │ • 사용자    │  │ • 이미지    │  │ • 타임  │ │
-│  │ • 피드 조회 │  │   관리      │  │   업로드    │  │   라인  │ │
-│  │ • 사용자    │  │ • 팔로우    │  │ • 이미지    │  │ • 실시간│ │
-│  │   정보 연동 │  │   관리      │  │   처리      │  │   피드  │ │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────┘ │
-├─────────────────────────────────────────────────────────────────┤
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐  ┌─────────┐ │
-│  │   Redis     │  │   Kafka     │  │   MySQL     │  │   EFS   │ │
-│  │             │  │             │  │             │  │         │ │
-│  │ • 캐싱      │  │ • 메시지    │  │ • 사용자    │  │ • 이미지│ │
-│  │ • 세션      │  │   큐        │  │   데이터    │  │   저장  │ │
-│  │ • 실시간    │  │ • 이벤트    │  │ • 피드      │  │ • 파일  │ │
-│  │   알림      │  │   스트리밍  │  │   데이터    │  │   공유  │ │
-│  └─────────────┘  └─────────────┘  └─────────────┘  └─────────┘ │
-└─────────────────────────────────────────────────────────────────┘
+
+```mermaid
+graph TB
+    subgraph "SNS Platform"
+        subgraph "Application Layer"
+            FS[Feed Server<br/>• 피드 CRUD<br/>• 피드 조회<br/>• 사용자 정보 연동]
+            US[User Server<br/>• 사용자 관리<br/>• 팔로우 관리<br/>• 인증/인가]
+            IS[Image Server<br/>• 이미지 업로드<br/>• 이미지 처리<br/>• CDN 연동]
+            TS[Timeline Server<br/>• 타임라인<br/>• 실시간 피드<br/>• 소셜 기능]
+        end
+        
+        subgraph "Infrastructure Layer"
+            RD[Redis<br/>• 캐싱<br/>• 세션<br/>• 실시간 알림]
+            KF[Kafka<br/>• 메시지 큐<br/>• 이벤트 스트리밍<br/>• 비동기 통신]
+            DB[(MySQL RDS<br/>• 사용자 데이터<br/>• 피드 데이터<br/>• 관계 데이터)]
+            ST[EFS<br/>• 이미지 저장<br/>• 파일 공유<br/>• 스토리지]
+        end
+    end
+    
+    FS <--> RD
+    US <--> RD
+    IS <--> ST
+    TS <--> KF
+    
+    FS <--> DB
+    US <--> DB
+    IS <--> DB
+    TS <--> DB
+    
+    FS <--> US
+    TS <--> FS
+    TS <--> US
 ```
 
 ### 1.2 기술 스택
@@ -204,28 +214,45 @@ GET    /api/comments/{feedId} - 피드별 댓글 조회
 ## 3. 데이터베이스 설계
 
 ### 3.1 ERD (Entity Relationship Diagram)
-```
-┌─────────────┐    ┌─────────────┐    ┌─────────────┐
-│    User     │    │   Follow    │    │ SocialFeed  │
-├─────────────┤    ├─────────────┤    ├─────────────┤
-│ user_id (PK)│    │follow_id(PK)│    │feed_id (PK) │
-│ username    │    │user_id (FK) │    │image_id     │
-│ email       │    │follower_id  │    │uploader_id  │
-│ password    │    │follow_datetime│  │upload_datetime│
-└─────────────┘    └─────────────┘    │contents     │
-         │                │           └─────────────┘
-         │                │                   │
-         └────────────────┼───────────────────┘
-                          │
-                    ┌─────────────┐
-                    │   Image     │
-                    ├─────────────┤
-                    │image_id (PK)│
-                    │user_id (FK) │
-                    │file_path    │
-                    │file_size    │
-                    │upload_datetime│
-                    └─────────────┘
+
+```mermaid
+erDiagram
+    User {
+        int user_id PK
+        string username
+        string email
+        string password
+        datetime created_at
+    }
+    
+    Follow {
+        int follow_id PK
+        int user_id FK
+        int follower_id FK
+        datetime follow_datetime
+    }
+    
+    SocialFeed {
+        int feed_id PK
+        string image_id
+        int uploader_id FK
+        datetime upload_datetime
+        text contents
+    }
+    
+    Image {
+        string image_id PK
+        int user_id FK
+        string file_path
+        int file_size
+        datetime upload_datetime
+    }
+    
+    User ||--o{ Follow : "follows"
+    User ||--o{ Follow : "followed_by"
+    User ||--o{ SocialFeed : "creates"
+    User ||--o{ Image : "uploads"
+    SocialFeed }o--|| Image : "contains"
 ```
 
 ### 3.2 테이블 상세 정보
