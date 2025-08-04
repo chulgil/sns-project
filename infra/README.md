@@ -57,8 +57,12 @@ cd infra/script
 # 네트워크 정보 확인
 ./utils/get_network_info.sh
 
-# EFS 설정
+# EFS 설정 (개선된 스크립트)
 ./storage/setup-efs.sh
+
+# 설정 확인
+kubectl get storageclass
+kubectl get pvc -n sns
 
 # Fargate 프로파일 설정 (선택사항)
 ./compute/setup_fargate.sh
@@ -79,7 +83,8 @@ infra/script/
 │   ├── fix.sh              # 문제 해결
 │   └── monitor.sh          # 모니터링
 ├── storage/                # 스토리지 관련
-│   └── setup-efs.sh        # EFS 설정
+│   ├── setup-efs.sh        # EFS 설정 (개선됨)
+│   └── cleanup-efs.sh      # EFS 정리
 ├── compute/                # 컴퓨팅 관련
 │   └── setup_fargate.sh    # Fargate 설정
 ├── utils/                  # 유틸리티 스크립트
@@ -88,7 +93,8 @@ infra/script/
 │   ├── check_fargate_status.sh # Fargate 상태 확인
 │   └── ...                 # 기타 유틸리티
 └── configs/                # 설정 파일
-    ├── efs-setup.yaml      # EFS 설정
+    ├── efs-setup.yaml      # EFS Kubernetes 설정
+    ├── efs-csi-policy.json # EFS CSI Driver IAM 정책
     └── aws-auth.yaml       # AWS 인증 설정
 ```
 
@@ -340,10 +346,74 @@ kubectl version 명령을 통해 클러스터가 정상적으로 연결된 것�
 ### 개요
 EFS(Elastic File System)는 여러 가용영역에 분산된 노드 간에 파일을 공유하기 위한 설정입니다. 프로젝트 학습에 집중하고 싶다면 이 설정을 건너뛸 수 있습니다.
 
-### 자동 설정 (권장)
+### 🚀 자동 설정 (권장)
+개선된 스크립트를 사용하여 EFS를 자동으로 설정할 수 있습니다.
+
 ```bash
 cd infra/script
+
+# 기본 설정 (sns-cluster, ap-northeast-2)
 ./storage/setup-efs.sh
+
+# 특정 클러스터와 지역 지정
+./storage/setup-efs.sh my-cluster us-west-2
+
+# 도움말 보기
+./storage/setup-efs.sh help
+```
+
+### ✨ 스크립트 개선사항
+- **안전한 재실행**: 기존 리소스 존재 시 에러 대신 적절한 메시지 출력 후 진행
+- **동적 설정**: OIDC Provider ID와 AWS 계정 ID를 자동으로 가져와서 사용
+- **중복 생성 방지**: EFS 파일 시스템, Access Point, IAM 정책/역할 중복 생성 방지
+- **상태 확인**: 각 단계별로 기존 리소스 사용 여부를 명확히 표시
+
+### 📋 설정 내용
+스크립트는 다음 리소스들을 자동으로 생성/설정합니다:
+
+1. **EFS 파일 시스템**: 공유 스토리지 생성
+2. **EFS 보안 그룹**: 클러스터와의 통신을 위한 보안 규칙
+3. **EFS 마운트 타겟**: 각 서브넷에 마운트 포인트 생성
+4. **EFS Access Point**: 파일 시스템 접근을 위한 엔드포인트
+5. **IAM 정책 및 역할**: EFS CSI Driver를 위한 권한 설정
+6. **Kubernetes 리소스**: StorageClass, PVC, ServiceAccount 등
+
+### 🔧 설정 확인 및 관리
+
+#### 설정 상태 확인
+```bash
+# StorageClass 확인
+kubectl get storageclass
+
+# PVC 상태 확인
+kubectl get pvc -n sns
+
+# EFS CSI Driver 상태 확인
+kubectl get pods -n kube-system -l app=efs-csi-node
+
+# EFS 마운트 타겟 확인
+aws efs describe-mount-targets --file-system-id <EFS_ID> --region ap-northeast-2
+```
+
+#### EFS 정리 (필요시)
+```bash
+# EFS 리소스 정리
+./storage/cleanup-efs.sh
+
+# 특정 클러스터와 지역 지정
+./storage/cleanup-efs.sh my-cluster us-west-2
+```
+
+### 📁 설정 파일 위치
+```
+infra/script/
+├── configs/
+│   ├── efs-setup.yaml          # EFS Kubernetes 설정
+│   └── efs-csi-policy.json     # EFS CSI Driver IAM 정책
+├── storage/
+│   ├── setup-efs.sh            # EFS 설정 스크립트
+│   └── cleanup-efs.sh          # EFS 정리 스크립트
+└── ...
 ```
 
 ### 수동 설정 대안
@@ -512,13 +582,14 @@ kubectl logs -n sns deployment/image-server-fargate
 
 **마지막 업데이트**: 2025년 1월
 
-## EFS Storage 연결
+## 🔧 수동 EFS 설정 (고급 사용자용)
 
-## IAM Role 생성
+> ⚠️ **참고**: 위의 자동 설정 스크립트를 사용하는 것을 권장합니다. 수동 설정은 고급 사용자나 특별한 요구사항이 있는 경우에만 사용하세요.
+
+### IAM Role 생성
 - EKS - cluster에서 sns-cluster 선택
 - OpenID Connect provider URL 복사
-- IAM - Identity Providers tjsxor
-- OpenID Connect 선택
+- IAM - Identity Providers에서 OpenID Connect 선택
 - Provider URL에 EKS에서 복사한 OpenID URL 붙여넣고 Get Thumbprint 클릭
 - Audience에 `sts.amazonaws.com` 입력
 - Add Provider 눌러서 생성
@@ -528,8 +599,8 @@ kubectl logs -n sns deployment/image-server-fargate
 - Audience에서 sts.amazonaws.com 선택 후 Next
 - Permission에서 AmazonEFSCSIDriverPolicy 검색해서 선택 후 Next
 - AmazonEKS_EFS_CSI_DriverRole으로 Role 이름 주고 생성
-- IAM - Roles에서 AmazonEKS_EFS_CSI_DriverRole 선택하고 Trust Relationships 탭에서 Edit Trust Policy 서택
-- Conditiond에서 `"oidc.eks.ap-northeast-2.amazonaws.com/id/OOOOOOOO:aud": "sts.amazonaws.com"`로 시작하는 한 줄 복사해서 붙여넣은 다음에 `"oidc.eks.ap-northeast-2.amazonaws.com/id/OOOOOOOO:sub": "system:serviceaccount:kube-system:efs-csi-*"`와 같은 형태로 변경
+- IAM - Roles에서 AmazonEKS_EFS_CSI_DriverRole 선택하고 Trust Relationships 탭에서 Edit Trust Policy 선택
+- Condition에서 `"oidc.eks.ap-northeast-2.amazonaws.com/id/OOOOOOOO:aud": "sts.amazonaws.com"`로 시작하는 한 줄 복사해서 붙여넣은 다음에 `"oidc.eks.ap-northeast-2.amazonaws.com/id/OOOOOOOO:sub": "system:serviceaccount:kube-system:efs-csi-*"`와 같은 형태로 변경
   - `aud`를 `sub`로,
   - `sts.amazonaws.com`을 `system:serviceaccount:kube-system:efs-csi-*` 으로 변경
   - 최종적으로 aud, sub 2개의 컨디션이 있어야 함
@@ -574,8 +645,9 @@ parameters:
 
 - `kubectl apply -f efs-sc.yaml` 명령어로 StorageClass 생성
 
-### 참고
-[EFS CSI Driver 설치 가이드](https://docs.aws.amazon.com/ko_kr/eks/latest/userguide/efs-csi.html)
+### 참고 자료
+- [EFS CSI Driver 설치 가이드](https://docs.aws.amazon.com/ko_kr/eks/latest/userguide/efs-csi.html)
+- [AWS EKS EFS 가이드](https://docs.aws.amazon.com/ko_kr/eks/latest/userguide/efs-csi.html)
 
 ## MySQL DB 설정
 
