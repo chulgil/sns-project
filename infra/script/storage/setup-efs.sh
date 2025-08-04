@@ -55,10 +55,105 @@ resource_exists() {
         "eks-addon")
             aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$resource_id" --region "$region" >/dev/null 2>&1
             ;;
+        "oidc-provider")
+            aws iam list-open-id-connect-providers --query "OpenIDConnectProviderList[?contains(Arn, '$resource_id')]" --output text | grep -q "$resource_id"
+            ;;
         *)
             return 1
             ;;
     esac
+}
+
+# OIDC Provider 확인 및 등록
+check_and_setup_oidc_provider() {
+    log_info "OIDC Provider를 확인합니다..."
+    
+    # OIDC Provider ID 가져오기
+    OIDC_PROVIDER_ID=$(aws eks describe-cluster \
+        --name $CLUSTER_NAME \
+        --region $REGION \
+        --query 'cluster.identity.oidc.issuer' \
+        --output text | cut -d'/' -f5)
+    
+    if [ -z "$OIDC_PROVIDER_ID" ] || [ "$OIDC_PROVIDER_ID" = "None" ]; then
+        log_error "OIDC Provider ID를 가져올 수 없습니다."
+        exit 1
+    fi
+    
+    log_info "OIDC Provider ID: $OIDC_PROVIDER_ID"
+    
+    # OIDC Provider 존재 확인
+    if resource_exists "oidc-provider" "$OIDC_PROVIDER_ID"; then
+        log_skip "OIDC Provider가 이미 등록되어 있습니다."
+    else
+        log_info "OIDC Provider를 등록합니다..."
+        if eksctl utils associate-iam-oidc-provider \
+            --cluster $CLUSTER_NAME \
+            --region $REGION \
+            --approve >/dev/null 2>&1; then
+            log_success "OIDC Provider가 등록되었습니다."
+        else
+            log_error "OIDC Provider 등록에 실패했습니다."
+            exit 1
+        fi
+    fi
+}
+
+# EFS CSI Driver 상태 확인 및 재시작
+check_efs_csi_driver() {
+    log_info "EFS CSI Driver 상태를 확인합니다..."
+    
+    # EFS CSI Driver 파드 상태 확인
+    local controller_pods=$(kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-efs-csi-driver,app.kubernetes.io/component=controller --no-headers 2>/dev/null || echo "")
+    
+    if [ -n "$controller_pods" ]; then
+        local error_pods=$(echo "$controller_pods" | grep -E "(Error|CrashLoopBackOff|Pending)" || true)
+        
+        if [ -n "$error_pods" ]; then
+            log_warning "EFS CSI Driver 파드에 문제가 있습니다. 재시작합니다..."
+            kubectl rollout restart deployment/efs-csi-controller -n kube-system
+            
+            log_info "EFS CSI Driver 재시작 완료를 기다립니다..."
+            kubectl rollout status deployment/efs-csi-controller -n kube-system --timeout=300s
+            
+            if [ $? -eq 0 ]; then
+                log_success "EFS CSI Driver가 성공적으로 재시작되었습니다."
+            else
+                log_error "EFS CSI Driver 재시작에 실패했습니다."
+                exit 1
+            fi
+        else
+            log_skip "EFS CSI Driver 파드가 정상 상태입니다."
+        fi
+    else
+        log_warning "EFS CSI Driver 파드를 찾을 수 없습니다."
+    fi
+}
+
+# PVC 문제 해결
+fix_pvc_issues() {
+    log_info "PVC 문제를 확인하고 해결합니다..."
+    
+    # Pending 상태의 PVC 확인
+    local pending_pvcs=$(kubectl get pvc --all-namespaces --no-headers 2>/dev/null | grep "Pending" || true)
+    
+    if [ -n "$pending_pvcs" ]; then
+        log_warning "Pending 상태의 PVC가 발견되었습니다:"
+        echo "$pending_pvcs"
+        
+        # Pending PVC 삭제
+        echo "$pending_pvcs" | while read -r namespace name status rest; do
+            if [ "$status" = "Pending" ]; then
+                log_info "Pending PVC 삭제: $namespace/$name"
+                kubectl delete pvc "$name" -n "$namespace" --ignore-not-found=true
+            fi
+        done
+        
+        log_info "PVC 삭제 완료. 10초 후 다시 확인합니다..."
+        sleep 10
+    else
+        log_skip "Pending 상태의 PVC가 없습니다."
+    fi
 }
 
 # 네트워크 정보 가져오기
@@ -175,6 +270,24 @@ echo "🚀 EKS 자율 모드에서 EFS 설정을 시작합니다..."
 echo "클러스터: $CLUSTER_NAME"
 echo "지역: $REGION"
 echo ""
+
+# 사전 검사 및 설정
+log_info "사전 검사를 수행합니다..."
+
+# kubectl 연결 확인
+if ! kubectl cluster-info >/dev/null 2>&1; then
+    log_error "kubectl이 클러스터에 연결되지 않았습니다. kubeconfig를 확인하세요."
+    exit 1
+fi
+
+# OIDC Provider 확인 및 등록
+check_and_setup_oidc_provider
+
+# EFS CSI Driver 상태 확인
+check_efs_csi_driver
+
+# PVC 문제 해결
+fix_pvc_issues
 
 # 네트워크 정보 가져오기
 get_network_info
@@ -509,10 +622,52 @@ else
     log_warning "efs-setup.yaml 파일을 찾을 수 없습니다: $EFS_SETUP_YAML"
 fi
 
+# 13. 최종 검증
+log_info "설정 완료 후 최종 검증을 수행합니다..."
+
+# EFS CSI Driver 파드 상태 재확인
+log_info "EFS CSI Driver 파드 상태를 확인합니다..."
+kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-efs-csi-driver
+
+# StorageClass 확인
+log_info "StorageClass를 확인합니다..."
+kubectl get storageclass efs-sc
+
+# 테스트 PVC 생성 및 확인
+log_info "테스트 PVC를 생성하여 EFS 연결을 확인합니다..."
+cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: test-efs-pvc
+  namespace: sns
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 1Gi
+EOF
+
+# 테스트 PVC 상태 확인
+log_info "테스트 PVC 상태를 확인합니다..."
+sleep 10
+kubectl get pvc test-efs-pvc -n sns
+
+# 테스트 PVC 삭제
+log_info "테스트 PVC를 삭제합니다..."
+kubectl delete pvc test-efs-pvc -n sns --ignore-not-found=true
+
 log_success "EFS 설정이 완료되었습니다!"
 echo ""
 log_info "다음 단계:"
 echo "1. kubectl apply -f $(dirname "$0")/../configs/efs-setup.yaml"
 echo "2. kubectl get storageclass"
 echo "3. kubectl get pvc -n sns"
-echo "4. kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-efs-csi-driver" 
+echo "4. kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-efs-csi-driver"
+echo ""
+log_info "문제 해결:"
+echo "- PVC가 Pending 상태인 경우: kubectl describe pvc <pvc-name> -n <namespace>"
+echo "- EFS CSI Driver 오류인 경우: kubectl logs -n kube-system deployment/efs-csi-controller"
+echo "- OIDC Provider 문제인 경우: eksctl utils associate-iam-oidc-provider --cluster $CLUSTER_NAME --region $REGION --approve" 
