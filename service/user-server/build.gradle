@@ -34,7 +34,7 @@ jib {
 		image = 'openjdk:21'
 	}
 	to {
-		image = '{ecr주소}/user-server'
+		image = '421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/user-server'
 		tags = ['0.0.1']
 	}
 	container {

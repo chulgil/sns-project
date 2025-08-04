@@ -17,10 +17,12 @@ spec:
     spec:
       containers:
         - name: feed-container
-          image: 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/feed-server:0.0.2
+          image: 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/feed-server:0.0.3
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: dev
+            - name : USER_SERVICE
+              value: http://user-service.sns.svc.cluster.local:8080
           envFrom:
             - configMapRef:
                 name: mysql-config

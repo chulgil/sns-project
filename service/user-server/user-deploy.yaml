@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: user-container
-          image: {ecr주소}/user-server:0.0.1
+          image: 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/user-server:0.0.1
           env:
             - name: SPRING_PROFILES_ACTIVE
               value: dev

@@ -3,6 +3,7 @@ package com.example.feedserver.feed;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 
 @RestController
@@ -16,8 +17,17 @@ public class SocialFeedController {
     }
 
     @GetMapping
-    public List<SocialFeed> getAllFeeds() {
-        return feedService.getAllFeeds();
+    public List<FeedInfo> getAllFeeds() {
+        List<SocialFeed> allFeeds = feedService.getAllFeeds();
+
+        List<FeedInfo> result = new ArrayList<>();
+        for (SocialFeed feed: allFeeds) {
+            UserInfo user = feedService.getUserInfo(feed.getUploaderId());
+            FeedInfo feedInfo = new FeedInfo(feed, user.getUsername());
+            result.add(feedInfo);
+        }
+
+        return result;
     }
 
     @GetMapping("/user/{userId}")
