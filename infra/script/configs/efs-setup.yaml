@@ -1,0 +1,89 @@
+# EFS CSI Driver 설치
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: kube-system
+---
+# EFS CSI Driver ServiceAccount
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: efs-csi-controller-sa
+  namespace: kube-system
+  annotations:
+    eks.amazonaws.com/role-arn: arn:aws:iam::421114334882:role/AmazonEKS_EFS_CSI_DriverRole
+---
+# EFS CSI Driver 설치
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: efs-csi-node
+  namespace: kube-system
+spec:
+  selector:
+    matchLabels:
+      app: efs-csi-node
+  template:
+    metadata:
+      labels:
+        app: efs-csi-node
+    spec:
+      serviceAccountName: efs-csi-controller-sa
+      containers:
+      - name: efs-csi-plugin
+        image: amazon/aws-efs-csi-driver:v1.5.8
+        args:
+        - --endpoint=$(CSI_ENDPOINT)
+        - --logtostderr
+        - --v=5
+        env:
+        - name: CSI_ENDPOINT
+          value: unix:///csi/csi.sock
+        - name: AWS_REGION
+          value: ap-northeast-2
+        volumeMounts:
+        - name: kubelet-dir
+          mountPath: /var/lib/kubelet
+        - name: plugin-dir
+          mountPath: /csi
+        - name: device-dir
+          mountPath: /dev
+      volumes:
+      - name: kubelet-dir
+        hostPath:
+          path: /var/lib/kubelet
+          type: Directory
+      - name: plugin-dir
+        hostPath:
+          path: /var/lib/kubelet/plugins/efs.csi.aws.com
+          type: DirectoryOrCreate
+      - name: device-dir
+        hostPath:
+          path: /dev
+---
+# EFS StorageClass 정의
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: efs-sc
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: fs-xxxxxxxxx  # 실제 EFS ID로 변경 필요
+  directoryPerms: "700"
+  gidRangeStart: "1000"
+  gidRangeEnd: "2000"
+---
+# EFS Access Point 생성 (선택사항)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: efs-pvc
+  namespace: sns
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 5Gi 

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-server-efs
+  namespace: sns
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: image-server
+      storage: efs
+  template:
+    metadata:
+      labels:
+        app: image-server
+        storage: efs
+    spec:
+      # 자동 노드 풀에서 실행 (노드 선택자 없음)
+      containers:
+        - name: image-container
+          image: {ecr주소}/image-server:0.0.1
+          env:
+            - name: SPRING_PROFILES_ACTIVE
+              value: dev
+            - name: UPLOAD_PATH
+              value: "/app/uploads"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "500m"
+            limits:
+              memory: "1Gi"
+              cpu: "1000m"
+          volumeMounts:
+            - name: efs-storage
+              mountPath: /app/uploads
+          readinessProbe:
+            httpGet:
+              path: /healthcheck/ready
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthcheck/live
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+      volumes:
+        - name: efs-storage
+          persistentVolumeClaim:
+            claimName: efs-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: image-service-efs
+  namespace: sns
+spec:
+  selector:
+    app: image-server
+    storage: efs
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP 
