@@ -386,13 +386,54 @@ else
     log_success "IAM 역할에 정책이 이미 연결되어 있습니다: $EXISTING_ATTACHED_POLICY"
 fi
 
-# 8. EFS 설정 정보 출력
+# 8. EFS CSI Driver Add-on 설치
+log_info "EFS CSI Driver Add-on을 확인합니다..."
+EXISTING_ADDON_STATUS=$(aws eks describe-addon \
+  --cluster-name $CLUSTER_NAME \
+  --addon-name aws-efs-csi-driver \
+  --region $REGION \
+  --query 'addon.status' \
+  --output text 2>/dev/null || echo "None")
+
+if [ "$EXISTING_ADDON_STATUS" = "None" ] || [ "$EXISTING_ADDON_STATUS" = "DELETING" ]; then
+    log_info "EFS CSI Driver Add-on을 설치합니다..."
+    aws eks create-addon \
+      --cluster-name $CLUSTER_NAME \
+      --addon-name aws-efs-csi-driver \
+      --service-account-role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/AmazonEKS_EFS_CSI_DriverRole \
+      --region $REGION
+    
+    log_info "Add-on 설치 완료를 기다립니다..."
+    while true; do
+      ADDON_STATUS=$(aws eks describe-addon \
+        --cluster-name $CLUSTER_NAME \
+        --addon-name aws-efs-csi-driver \
+        --region $REGION \
+        --query 'addon.status' \
+        --output text 2>/dev/null || echo "None")
+      
+      if [ "$ADDON_STATUS" = "ACTIVE" ]; then
+        log_success "EFS CSI Driver Add-on이 활성화되었습니다."
+        break
+      elif [ "$ADDON_STATUS" = "CREATE_FAILED" ]; then
+        log_error "EFS CSI Driver Add-on 설치에 실패했습니다."
+        exit 1
+      else
+        log_info "Add-on 상태: $ADDON_STATUS, 30초 후 다시 확인합니다..."
+        sleep 30
+      fi
+    done
+else
+    log_success "EFS CSI Driver Add-on이 이미 존재합니다. 상태: $EXISTING_ADDON_STATUS"
+fi
+
+# 9. EFS 설정 정보 출력
 log_info "EFS 설정 정보:"
 echo "EFS ID: $EFS_ID"
 echo "Access Point ID: $ACCESS_POINT_ID"
 echo "Security Group ID: $EFS_SG_ID"
 
-# 9. StorageClass 업데이트
+# 10. StorageClass 업데이트
 log_info "StorageClass를 업데이트합니다..."
 sed -i.bak "s/fs-xxxxxxxxx/$EFS_ID/g" "$(dirname "$0")/../configs/efs-setup.yaml"
 
@@ -401,4 +442,5 @@ echo ""
 log_info "다음 단계:"
 echo "1. kubectl apply -f $(dirname "$0")/../configs/efs-setup.yaml"
 echo "2. kubectl get storageclass"
-echo "3. kubectl get pvc -n sns" 
+echo "3. kubectl get pvc -n sns"
+echo "4. kubectl get pods -n kube-system -l app.kubernetes.io/name=aws-efs-csi-driver" 
