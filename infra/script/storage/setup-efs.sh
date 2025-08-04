@@ -356,8 +356,8 @@ if [ "$EXISTING_ROLE_ARN" = "None" ] || [ -z "$EXISTING_ROLE_ARN" ]; then
             },
             \"Action\": \"sts:AssumeRoleWithWebIdentity\",
             \"Condition\": {
-              \"StringEquals\": {
-                \"oidc.eks.$REGION.amazonaws.com/id/$OIDC_PROVIDER_ID:sub\": \"system:serviceaccount:kube-system:efs-csi-controller-sa\"
+              \"StringLike\": {
+                \"oidc.eks.$REGION.amazonaws.com/id/$OIDC_PROVIDER_ID:sub\": \"system:serviceaccount:kube-system:efs-csi-*\"
               }
             }
           }
