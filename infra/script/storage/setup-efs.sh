@@ -285,7 +285,7 @@ EXISTING_POLICY_ARN=$(aws iam list-policies \
 
 if [ "$EXISTING_POLICY_ARN" = "None" ] || [ -z "$EXISTING_POLICY_ARN" ]; then
     log_info "새로운 EFS CSI Driver IAM 정책을 생성합니다..."
-    cat > efs-csi-policy.json << EOF
+    cat > "$(dirname "$0")/../configs/efs-csi-policy.json" << EOF
 {
     "Version": "2012-10-17",
     "Statement": [
@@ -329,7 +329,7 @@ EOF
 
     aws iam create-policy \
       --policy-name AmazonEKS_EFS_CSI_DriverPolicy \
-      --policy-document file://efs-csi-policy.json \
+      --policy-document file://"$(dirname "$0")/../configs/efs-csi-policy.json" \
       --region $REGION
     log_success "새로운 IAM 정책이 생성되었습니다."
 else
