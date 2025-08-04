@@ -1,0 +1,22 @@
+apiVersion: eksctl.io/v1alpha5
+kind: ClusterConfig
+
+metadata:
+  name: sns-cluster
+  region: ap-northeast-2
+
+fargateProfiles:
+  - name: sns-fargate-profile
+    selectors:
+      # sns 네임스페이스의 모든 파드를 Fargate에서 실행
+      - namespace: sns
+      # 특정 라벨을 가진 파드만 선택할 수도 있음
+      # - namespace: sns
+      #   labels:
+      #     app: image-server
+    subnets:
+      - id: subnet-xxxxxxxxx  # Private subnet ID
+      - id: subnet-yyyyyyyyy  # Private subnet ID
+    tags:
+      Owner: chulgil
+      Project: sns-project 

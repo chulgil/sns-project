@@ -1,0 +1,67 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: efs-pvc
+  namespace: sns
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-server-fargate
+  namespace: sns
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: image-server
+  template:
+    metadata:
+      labels:
+        app: image-server
+    spec:
+      # Fargate 프로파일 지정
+      nodeSelector:
+        eks.amazonaws.com/compute-type: fargate
+      containers:
+      - name: image-server
+        image: {ecr주소}/image-server:0.0.1
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: efs-storage
+          mountPath: /app/uploads
+        env:
+        - name: UPLOAD_PATH
+          value: "/app/uploads"
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      volumes:
+      - name: efs-storage
+        persistentVolumeClaim:
+          claimName: efs-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: image-service-fargate
+  namespace: sns
+spec:
+  selector:
+    app: image-server
+  ports:
+  - protocol: TCP
+    port: 8080
+    targetPort: 8080
+  type: ClusterIP 

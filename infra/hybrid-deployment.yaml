@@ -1,0 +1,87 @@
+# Fargate에서 실행할 워크로드 (이미지 서버)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: image-server-fargate
+  namespace: sns
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: image-server
+      compute-type: fargate
+  template:
+    metadata:
+      labels:
+        app: image-server
+        compute-type: fargate
+    spec:
+      nodeSelector:
+        eks.amazonaws.com/compute-type: fargate
+      containers:
+      - name: image-server
+        image: {ecr주소}/image-server:0.0.1
+        ports:
+        - containerPort: 8080
+        volumeMounts:
+        - name: efs-storage
+          mountPath: /app/uploads
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+      volumes:
+      - name: efs-storage
+        persistentVolumeClaim:
+          claimName: efs-pvc
+---
+# 노드그룹에서 실행할 워크로드 (데이터베이스, 캐시 등)
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-server-nodegroup
+  namespace: sns
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: user-server
+      compute-type: nodegroup
+  template:
+    metadata:
+      labels:
+        app: user-server
+        compute-type: nodegroup
+    spec:
+      nodeSelector:
+        eks.amazonaws.com/compute-type: ec2
+        node.kubernetes.io/instance-type: t3.medium
+      containers:
+      - name: user-server
+        image: {ecr주소}/user-server:0.0.1
+        ports:
+        - containerPort: 8080
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: dev
+        envFrom:
+        - configMapRef:
+            name: mysql-config
+        - secretRef:
+            name: mysql-secret
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1000m"
+        volumeMounts:
+        - name: local-storage
+          mountPath: /app/logs
+      volumes:
+      - name: local-storage
+        emptyDir: {} 
