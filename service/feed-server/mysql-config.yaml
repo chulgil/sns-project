@@ -4,5 +4,5 @@ metadata:
   name: mysql-config
   namespace: sns
 data:
-  MYSQL_HOST: "mysql.infra.svc.cluster.local"
+  MYSQL_HOST: "mysql.sns.svc.cluster.local"
   MYSQL_PORT: "3306"

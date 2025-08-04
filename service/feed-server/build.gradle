@@ -32,8 +32,8 @@ jib {
 		image = 'openjdk:21'
 	}
 	to {
-		image = '638597541124.dkr.ecr.ap-northeast-2.amazonaws.com/feed-server'
-		tags = ['0.0.1']
+		image = '421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/feed-server'
+		tags = ['0.0.2']
 	}
 	container {
 		creationTime = 'USE_CURRENT_TIMESTAMP'
