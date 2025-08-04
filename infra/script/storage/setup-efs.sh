@@ -29,6 +29,38 @@ log_error() {
     echo -e "${RED}❌ $1${NC}"
 }
 
+log_skip() {
+    echo -e "${YELLOW}⏭️  $1${NC}"
+}
+
+# 리소스 존재 확인 함수
+resource_exists() {
+    local resource_type="$1"
+    local resource_id="$2"
+    local region="$3"
+    
+    case "$resource_type" in
+        "efs")
+            aws efs describe-file-systems --file-system-id "$resource_id" --region "$region" >/dev/null 2>&1
+            ;;
+        "security-group")
+            aws ec2 describe-security-groups --group-ids "$resource_id" --region "$region" >/dev/null 2>&1
+            ;;
+        "iam-role")
+            aws iam get-role --role-name "$resource_id" >/dev/null 2>&1
+            ;;
+        "iam-policy")
+            aws iam get-policy --policy-arn "$resource_id" >/dev/null 2>&1
+            ;;
+        "eks-addon")
+            aws eks describe-addon --cluster-name "$CLUSTER_NAME" --addon-name "$resource_id" --region "$region" >/dev/null 2>&1
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # 네트워크 정보 가져오기
 get_network_info() {
     log_info "클러스터 네트워크 정보를 가져옵니다..."
@@ -125,11 +157,12 @@ show_help() {
     echo "  $0 my-cluster us-west-2  # 특정 클러스터와 지역에 EFS 설정"
     echo ""
     echo "설정 내용:"
-    echo "  - EFS 파일 시스템 생성"
-    echo "  - EFS 보안 그룹 생성 및 규칙 설정"
-    echo "  - EFS 마운트 타겟 생성"
-    echo "  - EFS Access Point 생성"
-    echo "  - EFS CSI Driver IAM 역할 생성"
+    echo "  - EFS 파일 시스템 생성 (기존 존재 시 스킵)"
+    echo "  - EFS 보안 그룹 생성 및 규칙 설정 (기존 존재 시 스킵)"
+    echo "  - EFS 마운트 타겟 생성 (기존 존재 시 스킵)"
+    echo "  - EFS Access Point 생성 (기존 존재 시 스킵)"
+    echo "  - EFS CSI Driver IAM 역할 생성 (기존 존재 시 스킵)"
+    echo "  - EFS CSI Driver Add-on 설치 (기존 존재 시 스킵)"
 }
 
 # 메인 로직
@@ -166,7 +199,7 @@ if [ "$EXISTING_EFS_ID" = "None" ] || [ -z "$EXISTING_EFS_ID" ]; then
     log_success "새로운 EFS ID: $EFS_ID"
 else
     EFS_ID=$EXISTING_EFS_ID
-    log_success "기존 EFS ID 사용: $EFS_ID"
+    log_skip "기존 EFS 파일 시스템을 사용합니다: $EFS_ID"
 fi
 
 # 2. EFS 보안 그룹 생성 또는 기존 그룹 사용
@@ -189,7 +222,7 @@ if [ "$EXISTING_SG_ID" = "None" ] || [ -z "$EXISTING_SG_ID" ]; then
     log_success "새로운 EFS Security Group ID: $EFS_SG_ID"
 else
     EFS_SG_ID=$EXISTING_SG_ID
-    log_success "기존 EFS Security Group ID 사용: $EFS_SG_ID"
+    log_skip "기존 EFS Security Group을 사용합니다: $EFS_SG_ID"
 fi
 
 # 3. EFS 보안 그룹 규칙 설정
@@ -202,15 +235,18 @@ EXISTING_RULE=$(aws ec2 describe-security-groups \
 
 if [[ -z "$EXISTING_RULE" || "$EXISTING_RULE" == "None" ]]; then
     log_info "EFS 보안 그룹 규칙을 설정합니다..."
-    aws ec2 authorize-security-group-ingress \
+    if aws ec2 authorize-security-group-ingress \
       --group-id $EFS_SG_ID \
       --protocol tcp \
       --port 2049 \
       --source-group $CLUSTER_SG_ID \
-      --region $REGION || true
-    log_success "EFS 보안 그룹 규칙이 설정되었습니다(또는 이미 존재)."
+      --region $REGION 2>/dev/null; then
+        log_success "EFS 보안 그룹 규칙이 설정되었습니다."
+    else
+        log_warning "EFS 보안 그룹 규칙이 이미 존재하거나 설정에 실패했습니다."
+    fi
 else
-    log_success "EFS 보안 그룹 규칙이 이미 존재합니다."
+    log_skip "EFS 보안 그룹 규칙이 이미 존재합니다."
 fi
 
 # 4. EFS 파일 시스템이 available 상태가 될 때까지 대기
@@ -233,22 +269,26 @@ done
 
 # 5. EFS 마운트 타겟 생성
 for SUBNET_ID in "${SUBNET_IDS_ARRAY[@]}"; do
-  log_info "마운트 타겟 생성 중: $SUBNET_ID"
+  log_info "마운트 타겟 확인 중: $SUBNET_ID"
   EXISTING_MT=$(aws efs describe-mount-targets \
     --file-system-id $EFS_ID \
     --region $REGION \
     --query "MountTargets[?SubnetId=='$SUBNET_ID'].MountTargetId" \
     --output text)
+  
   if [ -z "$EXISTING_MT" ] || [ "$EXISTING_MT" == "None" ]; then
-    aws efs create-mount-target \
+    log_info "새로운 마운트 타겟을 생성합니다: $SUBNET_ID"
+    if aws efs create-mount-target \
       --file-system-id $EFS_ID \
       --subnet-id $SUBNET_ID \
       --security-groups $EFS_SG_ID \
-      --region $REGION \
-      && log_success "마운트 타겟 생성 완료: $SUBNET_ID" \
-      || log_warning "마운트 타겟 생성 실패: $SUBNET_ID (이미 존재할 수 있습니다)"
+      --region $REGION >/dev/null 2>&1; then
+        log_success "마운트 타겟 생성 완료: $SUBNET_ID"
+    else
+        log_warning "마운트 타겟 생성에 실패했습니다: $SUBNET_ID (이미 존재할 수 있습니다)"
+    fi
   else
-    log_success "이미 존재하는 마운트 타겟: $EXISTING_MT ($SUBNET_ID)"
+    log_skip "이미 존재하는 마운트 타겟: $EXISTING_MT ($SUBNET_ID)"
   fi
 done
 
@@ -272,20 +312,23 @@ if [ "$EXISTING_ACCESS_POINT_ID" = "None" ] || [ -z "$EXISTING_ACCESS_POINT_ID" 
     log_success "새로운 Access Point ID: $ACCESS_POINT_ID"
 else
     ACCESS_POINT_ID=$EXISTING_ACCESS_POINT_ID
-    log_success "기존 Access Point ID 사용: $ACCESS_POINT_ID"
+    log_skip "기존 Access Point를 사용합니다: $ACCESS_POINT_ID"
 fi
 
-# 7. EFS CSI Driver IAM 역할 생성
+# 7. EFS CSI Driver IAM 정책 생성
 log_info "EFS CSI Driver IAM 정책을 확인합니다..."
-EXISTING_POLICY_ARN=$(aws iam list-policies \
-  --scope Local \
-  --path-prefix "/" \
-  --query "Policies[?PolicyName=='AmazonEKS_EFS_CSI_DriverPolicy'].Arn" \
-  --output text)
+POLICY_ARN="arn:aws:iam::$AWS_ACCOUNT_ID:policy/AmazonEKS_EFS_CSI_DriverPolicy"
 
-if [ "$EXISTING_POLICY_ARN" = "None" ] || [ -z "$EXISTING_POLICY_ARN" ]; then
+if resource_exists "iam-policy" "$POLICY_ARN"; then
+    log_skip "기존 IAM 정책이 존재합니다: $POLICY_ARN"
+else
     log_info "새로운 EFS CSI Driver IAM 정책을 생성합니다..."
-    cat > "$(dirname "$0")/../configs/efs-csi-policy.json" << EOF
+    
+    # configs 디렉토리 생성
+    CONFIGS_DIR="$(dirname "$0")/../configs"
+    mkdir -p "$CONFIGS_DIR"
+    
+    cat > "$CONFIGS_DIR/efs-csi-policy.json" << EOF
 {
     "Version": "2012-10-17",
     "Statement": [
@@ -327,25 +370,26 @@ if [ "$EXISTING_POLICY_ARN" = "None" ] || [ -z "$EXISTING_POLICY_ARN" ]; then
 }
 EOF
 
-    aws iam create-policy \
+    if aws iam create-policy \
       --policy-name AmazonEKS_EFS_CSI_DriverPolicy \
-      --policy-document file://"$(dirname "$0")/../configs/efs-csi-policy.json" \
-      --region $REGION
-    log_success "새로운 IAM 정책이 생성되었습니다."
-else
-    log_success "기존 IAM 정책이 존재합니다: $EXISTING_POLICY_ARN"
+      --policy-document file://"$CONFIGS_DIR/efs-csi-policy.json" \
+      --region $REGION >/dev/null 2>&1; then
+        log_success "새로운 IAM 정책이 생성되었습니다."
+    else
+        log_warning "IAM 정책 생성에 실패했습니다 (이미 존재할 수 있습니다)."
+    fi
 fi
 
+# 8. EFS CSI Driver IAM 역할 생성
 log_info "EFS CSI Driver IAM 역할을 확인합니다..."
-EXISTING_ROLE_ARN=$(aws iam get-role \
-  --role-name AmazonEKS_EFS_CSI_DriverRole \
-  --query 'Role.Arn' \
-  --output text 2>/dev/null || echo "None")
+ROLE_NAME="AmazonEKS_EFS_CSI_DriverRole"
 
-if [ "$EXISTING_ROLE_ARN" = "None" ] || [ -z "$EXISTING_ROLE_ARN" ]; then
+if resource_exists "iam-role" "$ROLE_NAME"; then
+    log_skip "기존 IAM 역할이 존재합니다: $ROLE_NAME"
+else
     log_info "새로운 EFS CSI Driver IAM 역할을 생성합니다..."
-    aws iam create-role \
-      --role-name AmazonEKS_EFS_CSI_DriverRole \
+    if aws iam create-role \
+      --role-name "$ROLE_NAME" \
       --assume-role-policy-document "{
         \"Version\": \"2012-10-17\",
         \"Statement\": [
@@ -363,79 +407,107 @@ if [ "$EXISTING_ROLE_ARN" = "None" ] || [ -z "$EXISTING_ROLE_ARN" ]; then
           }
         ]
       }" \
-      --region $REGION
-    log_success "새로운 IAM 역할이 생성되었습니다."
-else
-    log_success "기존 IAM 역할이 존재합니다: $EXISTING_ROLE_ARN"
+      --region $REGION >/dev/null 2>&1; then
+        log_success "새로운 IAM 역할이 생성되었습니다."
+    else
+        log_warning "IAM 역할 생성에 실패했습니다 (이미 존재할 수 있습니다)."
+    fi
 fi
 
+# 9. IAM 역할에 정책 연결
 log_info "IAM 역할에 정책을 연결합니다..."
 EXISTING_ATTACHED_POLICY=$(aws iam list-attached-role-policies \
-  --role-name AmazonEKS_EFS_CSI_DriverRole \
+  --role-name "$ROLE_NAME" \
   --query "AttachedPolicies[?PolicyName=='AmazonEKS_EFS_CSI_DriverPolicy'].PolicyArn" \
   --output text 2>/dev/null || echo "None")
 
 if [ "$EXISTING_ATTACHED_POLICY" = "None" ] || [ -z "$EXISTING_ATTACHED_POLICY" ]; then
     log_info "IAM 역할에 정책을 연결합니다..."
-    aws iam attach-role-policy \
-      --role-name AmazonEKS_EFS_CSI_DriverRole \
-      --policy-arn arn:aws:iam::$AWS_ACCOUNT_ID:policy/AmazonEKS_EFS_CSI_DriverPolicy \
-      --region $REGION
-    log_success "IAM 역할에 정책이 연결되었습니다."
+    if aws iam attach-role-policy \
+      --role-name "$ROLE_NAME" \
+      --policy-arn "$POLICY_ARN" \
+      --region $REGION >/dev/null 2>&1; then
+        log_success "IAM 역할에 정책이 연결되었습니다."
+    else
+        log_warning "IAM 역할에 정책 연결에 실패했습니다 (이미 연결되어 있을 수 있습니다)."
+    fi
 else
-    log_success "IAM 역할에 정책이 이미 연결되어 있습니다: $EXISTING_ATTACHED_POLICY"
+    log_skip "IAM 역할에 정책이 이미 연결되어 있습니다: $EXISTING_ATTACHED_POLICY"
 fi
 
-# 8. EFS CSI Driver Add-on 설치
+# 10. EFS CSI Driver Add-on 설치
 log_info "EFS CSI Driver Add-on을 확인합니다..."
-EXISTING_ADDON_STATUS=$(aws eks describe-addon \
-  --cluster-name $CLUSTER_NAME \
-  --addon-name aws-efs-csi-driver \
-  --region $REGION \
-  --query 'addon.status' \
-  --output text 2>/dev/null || echo "None")
+ADDON_NAME="aws-efs-csi-driver"
 
-if [ "$EXISTING_ADDON_STATUS" = "None" ] || [ "$EXISTING_ADDON_STATUS" = "DELETING" ]; then
-    log_info "EFS CSI Driver Add-on을 설치합니다..."
-    aws eks create-addon \
+if resource_exists "eks-addon" "$ADDON_NAME"; then
+    EXISTING_ADDON_STATUS=$(aws eks describe-addon \
       --cluster-name $CLUSTER_NAME \
-      --addon-name aws-efs-csi-driver \
-      --service-account-role-arn arn:aws:iam::$AWS_ACCOUNT_ID:role/AmazonEKS_EFS_CSI_DriverRole \
-      --region $REGION
+      --addon-name "$ADDON_NAME" \
+      --region $REGION \
+      --query 'addon.status' \
+      --output text 2>/dev/null || echo "None")
     
-    log_info "Add-on 설치 완료를 기다립니다..."
-    while true; do
-      ADDON_STATUS=$(aws eks describe-addon \
-        --cluster-name $CLUSTER_NAME \
-        --addon-name aws-efs-csi-driver \
-        --region $REGION \
-        --query 'addon.status' \
-        --output text 2>/dev/null || echo "None")
-      
-      if [ "$ADDON_STATUS" = "ACTIVE" ]; then
-        log_success "EFS CSI Driver Add-on이 활성화되었습니다."
-        break
-      elif [ "$ADDON_STATUS" = "CREATE_FAILED" ]; then
-        log_error "EFS CSI Driver Add-on 설치에 실패했습니다."
-        exit 1
-      else
-        log_info "Add-on 상태: $ADDON_STATUS, 30초 후 다시 확인합니다..."
-        sleep 30
-      fi
-    done
+    if [ "$EXISTING_ADDON_STATUS" = "ACTIVE" ]; then
+        log_skip "EFS CSI Driver Add-on이 이미 활성화되어 있습니다."
+    else
+        log_warning "EFS CSI Driver Add-on이 존재하지만 상태가 $EXISTING_ADDON_STATUS입니다."
+    fi
 else
-    log_success "EFS CSI Driver Add-on이 이미 존재합니다. 상태: $EXISTING_ADDON_STATUS"
+    log_info "새로운 EFS CSI Driver Add-on을 설치합니다..."
+    if aws eks create-addon \
+      --cluster-name $CLUSTER_NAME \
+      --addon-name "$ADDON_NAME" \
+      --service-account-role-arn "arn:aws:iam::$AWS_ACCOUNT_ID:role/$ROLE_NAME" \
+      --region $REGION >/dev/null 2>&1; then
+        
+        log_info "Add-on 설치 완료를 기다립니다..."
+        while true; do
+          ADDON_STATUS=$(aws eks describe-addon \
+            --cluster-name $CLUSTER_NAME \
+            --addon-name "$ADDON_NAME" \
+            --region $REGION \
+            --query 'addon.status' \
+            --output text 2>/dev/null || echo "None")
+          
+          if [ "$ADDON_STATUS" = "ACTIVE" ]; then
+            log_success "EFS CSI Driver Add-on이 활성화되었습니다."
+            break
+          elif [ "$ADDON_STATUS" = "CREATE_FAILED" ]; then
+            log_error "EFS CSI Driver Add-on 설치에 실패했습니다."
+            exit 1
+          else
+            log_info "Add-on 상태: $ADDON_STATUS, 30초 후 다시 확인합니다..."
+            sleep 30
+          fi
+        done
+    else
+        log_warning "EFS CSI Driver Add-on 설치에 실패했습니다 (이미 존재할 수 있습니다)."
+    fi
 fi
 
-# 9. EFS 설정 정보 출력
+# 11. EFS 설정 정보 출력
 log_info "EFS 설정 정보:"
 echo "EFS ID: $EFS_ID"
 echo "Access Point ID: $ACCESS_POINT_ID"
 echo "Security Group ID: $EFS_SG_ID"
 
-# 10. StorageClass 업데이트
+# 12. StorageClass 업데이트
 log_info "StorageClass를 업데이트합니다..."
-sed -i.bak "s/fs-xxxxxxxxx/$EFS_ID/g" "$(dirname "$0")/../configs/efs-setup.yaml"
+EFS_SETUP_YAML="$(dirname "$0")/../configs/efs-setup.yaml"
+
+if [ -f "$EFS_SETUP_YAML" ]; then
+    # 백업 생성
+    cp "$EFS_SETUP_YAML" "$EFS_SETUP_YAML.bak"
+    
+    # 파일시스템 ID 업데이트
+    if sed -i.bak "s/fs-xxxxxxxxx/$EFS_ID/g" "$EFS_SETUP_YAML"; then
+        log_success "StorageClass가 업데이트되었습니다."
+    else
+        log_warning "StorageClass 업데이트에 실패했습니다."
+    fi
+else
+    log_warning "efs-setup.yaml 파일을 찾을 수 없습니다: $EFS_SETUP_YAML"
+fi
 
 log_success "EFS 설정이 완료되었습니다!"
 echo ""
