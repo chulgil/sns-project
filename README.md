@@ -98,6 +98,37 @@ sns_project/
 
 3. **배포 상태 확인**
    ```bash
+
+## 🧪 로컬 테스트
+
+Kubernetes에 배포된 서비스를 로컬 환경에서 테스트하는 방법들을 제공합니다.
+
+### 테스트 방법들
+- **[포트포워딩을 통한 로컬 접근](docs/local-testing-guide.md#3-포트포워딩을-통한-로컬호스트-접근)** - 가장 간단한 방법
+- **[파드 내부 쉘 접속](docs/local-testing-guide.md#1-파드-내부에서-쉘-호출)** - 직접적인 디버깅
+- **[임시 외부 노출](docs/local-testing-guide.md#4-서비스-타입-변경으로-외부-접근)** - NodePort/LoadBalancer 사용
+- **[Ingress 구성](docs/local-testing-guide.md#2-ingress-구성-후-외부에서-api-호출)** - 프로덕션과 유사한 환경
+- **[Telepresence 개발 환경](docs/local-testing-guide.md#5-telepresence를-사용한-개발-환경)** - 고급 개발 도구
+
+### 빠른 시작
+```bash
+# 포트포워딩으로 feed-server 테스트
+kubectl port-forward service/feed-service 8080:8080 -n sns
+
+# 새 터미널에서 테스트
+curl http://localhost:8080/healthcheck/ready
+```
+
+### 임시 외부 접근 스크립트
+```bash
+# feed-server를 NodePort로 외부 노출
+./infra/script/temp-external-access.sh feed-server
+
+# user-server를 다른 포트로 노출
+./infra/script/temp-external-access.sh user-server sns 30081
+```
+
+자세한 내용은 **[로컬 테스트 가이드](docs/local-testing-guide.md)**를 참조하세요.
    kubectl get pods
    kubectl get services
    ```
