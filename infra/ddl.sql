@@ -32,3 +32,13 @@ create table follow
     follow_datetime datetime default CURRENT_TIMESTAMP null,
     mail_sent_datetime datetime default null
 );
+
+create table social_feed
+(
+    feed_id         int auto_increment
+        primary key,
+    image_id        varchar(255)                       null,
+    uploader_id     int                                not null,
+    upload_datetime datetime                           null,
+    contents        text                               null
+);
