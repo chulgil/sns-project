@@ -483,6 +483,95 @@ kubectl logs deployment/feed-server -n sns | grep -i error
 kubectl logs deployment/feed-server -n sns | grep -i "execution time"
 ```
 
+### 8.3 ECR 인증 문제 해결
+
+#### ECR 인증 만료 시 재로그인
+```bash
+# 1. AWS ECR 로그인
+aws ecr get-login-password --region ap-northeast-2 | docker login --username AWS --password-stdin 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com
+
+# 2. 로그인 상태 확인
+docker login 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com
+
+# 3. ECR 리포지토리 목록 확인
+aws ecr describe-repositories --region ap-northeast-2
+
+# 4. 이미지 태그 목록 확인
+aws ecr describe-images --repository-name <repository-name> --region ap-northeast-2
+```
+
+#### ImagePullBackOff 오류 해결
+```bash
+# 1. 파드 상태 확인
+kubectl get pods -n sns | grep -E "(ImagePullBackOff|ErrImagePull)"
+
+# 2. 파드 상세 정보 확인
+kubectl describe pod <pod-name> -n sns
+
+# 3. ECR 인증 재설정
+kubectl delete secret regcred -n sns 2>/dev/null || true
+kubectl create secret docker-registry regcred \
+  --docker-server=421114334882.dkr.ecr.ap-northeast-2.amazonaws.com \
+  --docker-username=AWS \
+  --docker-password=$(aws ecr get-login-password --region ap-northeast-2) \
+  --namespace=sns
+
+# 4. 파드 재시작
+kubectl rollout restart deployment/<service-name> -n sns
+```
+
+#### ECR 인증 자동화 스크립트
+```bash
+#!/bin/bash
+# ECR 인증 자동화 스크립트
+
+REGION="ap-northeast-2"
+ACCOUNT_ID="421114334882"
+ECR_REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
+
+echo "🔐 ECR 인증을 시작합니다..."
+
+# ECR 로그인
+echo "1. ECR 로그인 중..."
+aws ecr get-login-password --region $REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+
+if [ $? -eq 0 ]; then
+    echo "✅ ECR 로그인 성공"
+else
+    echo "❌ ECR 로그인 실패"
+    exit 1
+fi
+
+# 기존 시크릿 삭제
+echo "2. 기존 Docker 시크릿 삭제 중..."
+kubectl delete secret regcred -n sns 2>/dev/null || true
+
+# 새로운 시크릿 생성
+echo "3. 새로운 Docker 시크릿 생성 중..."
+kubectl create secret docker-registry regcred \
+  --docker-server=$ECR_REGISTRY \
+  --docker-username=AWS \
+  --docker-password=$(aws ecr get-login-password --region $REGION) \
+  --namespace=sns
+
+if [ $? -eq 0 ]; then
+    echo "✅ Docker 시크릿 생성 성공"
+else
+    echo "❌ Docker 시크릿 생성 실패"
+    exit 1
+fi
+
+# 서비스 재시작
+echo "4. 서비스 재시작 중..."
+kubectl rollout restart deployment/feed-server -n sns
+kubectl rollout restart deployment/user-server -n sns
+kubectl rollout restart deployment/image-server -n sns
+kubectl rollout restart deployment/timeline-server -n sns
+
+echo "✅ ECR 인증 및 서비스 재시작 완료"
+echo "📊 파드 상태 확인: kubectl get pods -n sns"
+```
+
 ---
 
 ## 9. 성능 최적화
