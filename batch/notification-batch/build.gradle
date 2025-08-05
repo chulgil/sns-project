@@ -33,7 +33,7 @@ jib {
 		image = "openjdk:21"
 	}
 	to {
-		image = "{ecr주소}/notification-batch"
+		image = "421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/notification-batch"
 		tags = ['0.0.1']
 	}
 	container {

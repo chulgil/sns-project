@@ -24,7 +24,7 @@ spec:
             claimName: image-volume-claim
       containers:
         - name: image
-          image: 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/image-server:0.0.2
+          image: 421114334882.dkr.ecr.ap-northeast-2.amazonaws.com/image-server:0.0.1
           volumeMounts:
             - name: image-volume
               mountPath: /images
